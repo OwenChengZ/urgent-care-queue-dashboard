@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#111827" />
+    </marker>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill: #111827; }
+      .subtitle { font: 400 15px Arial, sans-serif; fill: #4b5563; }
+      .lane-title { font: 700 16px Arial, sans-serif; fill: #111827; }
+      .box-title { font: 700 14px Arial, sans-serif; fill: #111827; }
+      .box-text { font: 400 12px Arial, sans-serif; fill: #374151; }
+      .small { font: 400 11px Arial, sans-serif; fill: #4b5563; }
+      .note { font: 400 12px Arial, sans-serif; fill: #6b7280; }
+      .lane { fill: #f9fafb; stroke: #d1d5db; stroke-width: 1.2; }
+      .box { fill: #ffffff; stroke-width: 1.5; rx: 10; ry: 10; }
+      .decision { fill: #ffffff; stroke: #111827; stroke-width: 1.4; }
+      .checkin { fill: #eef2ff; stroke: #4f46e5; }
+      .backend { fill: #ecfeff; stroke: #0891b2; }
+      .history { fill: #f0fdf4; stroke: #16a34a; }
+      .risk { fill: #fff7ed; stroke: #ea580c; }
+      .queue { fill: #fdf2f8; stroke: #db2777; }
+      .dashboard { fill: #f5f3ff; stroke: #7c3aed; }
+      .feedback { fill: #eff6ff; stroke: #2563eb; }
+      .line { fill: none; stroke: #111827; stroke-width: 1.6; marker-end: url(#arrow); }
+      .thin-line { fill: none; stroke: #6b7280; stroke-width: 1.2; marker-end: url(#arrow); }
+      .dash-line { fill: none; stroke: #6b7280; stroke-width: 1.2; stroke-dasharray: 6 5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1600" height="820" fill="#ffffff"/>
+  <text x="65" y="55" class="title">Intelligent Health Informatics Global Workflow</text>
+  <text x="65" y="82" class="subtitle">Backend-centered workflow for AI-supported triage, queue prioritization, dashboard actions, and feedback-driven patient history.</text>
+
+  <!-- Swimlanes -->
+  <rect x="50" y="120" width="190" height="610" class="lane"/>
+  <rect x="250" y="120" width="190" height="610" class="lane"/>
+  <rect x="450" y="120" width="190" height="610" class="lane"/>
+  <rect x="650" y="120" width="220" height="610" class="lane"/>
+  <rect x="880" y="120" width="240" height="610" class="lane"/>
+  <rect x="1130" y="120" width="200" height="610" class="lane"/>
+  <rect x="1340" y="120" width="210" height="610" class="lane"/>
+
+  <text x="83" y="150" class="lane-title">Patient Check-in</text>
+  <text x="289" y="150" class="lane-title">Backend Intake</text>
+  <text x="493" y="150" class="lane-title">Patient History</text>
+  <text x="688" y="150" class="lane-title">Risk Analysis Agent</text>
+  <text x="923" y="150" class="lane-title">Queue Agent</text>
+  <text x="1168" y="150" class="lane-title">Dashboard UI</text>
+  <text x="1380" y="150" class="lane-title">Feedback Loop</text>
+
+  <!-- Patient Check-in -->
+  <circle cx="90" cy="245" r="18" fill="#ffffff" stroke="#111827" stroke-width="1.4"/>
+  <text x="62" y="285" class="small">Patient arrives</text>
+  <text x="62" y="300" class="small">at clinic / ED</text>
+
+  <rect x="115" y="210" width="100" height="60" class="box checkin"/>
+  <text x="139" y="234" class="box-title">Check-in</text>
+  <text x="129" y="252" class="box-text">start visit</text>
+
+  <rect x="78" y="335" width="125" height="92" class="box checkin"/>
+  <text x="105" y="359" class="box-title">Patient Info</text>
+  <text x="96" y="380" class="box-text">Name / ID</text>
+  <text x="96" y="397" class="box-text">Age</text>
+  <text x="96" y="414" class="box-text">Symptoms</text>
+
+  <rect x="78" y="490" width="125" height="70" class="box checkin"/>
+  <text x="100" y="515" class="box-title">Medical</text>
+  <text x="94" y="534" class="box-text">history</text>
+  <text x="94" y="551" class="box-text">optional</text>
+
+  <!-- Backend Intake -->
+  <rect x="282" y="215" width="125" height="74" class="box backend"/>
+  <text x="309" y="240" class="box-title">API Request</text>
+  <text x="304" y="259" class="box-text">POST /intake</text>
+  <text x="300" y="276" class="box-text">from Flutter UI</text>
+
+  <polygon points="345,340 388,383 345,426 302,383" class="decision"/>
+  <text x="323" y="380" class="box-text">Fields</text>
+  <text x="319" y="395" class="box-text">valid?</text>
+
+  <rect x="282" y="500" width="125" height="76" class="box backend"/>
+  <text x="306" y="525" class="box-title">Create</text>
+  <text x="299" y="544" class="box-text">temporary</text>
+  <text x="300" y="561" class="box-text">patient record</text>
+
+  <!-- Patient History -->
+  <rect x="482" y="215" width="125" height="82" class="box history"/>
+  <text x="507" y="240" class="box-title">Database</text>
+  <text x="493" y="259" class="box-text">search by</text>
+  <text x="493" y="276" class="box-text">patient ID</text>
+
+  <rect x="482" y="355" width="125" height="82" class="box history"/>
+  <text x="506" y="380" class="box-title">Previous</text>
+  <text x="498" y="399" class="box-text">feedback and</text>
+  <text x="499" y="416" class="box-text">visit context</text>
+
+  <rect x="482" y="510" width="125" height="82" class="box history"/>
+  <text x="501" y="535" class="box-title">History</text>
+  <text x="499" y="554" class="box-text">prepared for</text>
+  <text x="499" y="571" class="box-text">AI prompt</text>
+
+  <!-- Risk Analysis Agent -->
+  <rect x="690" y="185" width="140" height="80" class="box risk"/>
+  <text x="713" y="210" class="box-title">DeepSeek LLM</text>
+  <text x="705" y="229" class="box-text">analyze current</text>
+  <text x="704" y="246" class="box-text">case + history</text>
+
+  <rect x="690" y="310" width="140" height="98" class="box risk"/>
+  <text x="710" y="335" class="box-title">Risk Report</text>
+  <text x="708" y="356" class="box-text">CTAS level</text>
+  <text x="708" y="373" class="box-text">Risk score</text>
+  <text x="708" y="390" class="box-text">Clinical summary</text>
+
+  <rect x="690" y="465" width="140" height="98" class="box risk"/>
+  <text x="707" y="490" class="box-title">Decision</text>
+  <text x="707" y="509" class="box-text">Reasoning</text>
+  <text x="707" y="526" class="box-text">Recommended</text>
+  <text x="707" y="543" class="box-text">staff action</text>
+
+  <text x="681" y="640" class="note">Decision support only.</text>
+  <text x="681" y="657" class="note">Not diagnosis or treatment.</text>
+
+  <!-- Queue Agent -->
+  <rect x="925" y="185" width="150" height="70" class="box queue"/>
+  <text x="951" y="210" class="box-title">Read CTAS</text>
+  <text x="941" y="229" class="box-text">and risk score</text>
+
+  <polygon points="1000,315 1050,365 1000,415 950,365" class="decision"/>
+  <text x="967" y="362" class="box-text">Select</text>
+  <text x="969" y="377" class="box-text">queue</text>
+
+  <rect x="910" y="465" width="180" height="105" class="box queue"/>
+  <text x="937" y="490" class="box-title">Queue Decision</text>
+  <text x="932" y="512" class="box-text">CTAS 1-2: Emergency</text>
+  <text x="932" y="529" class="box-text">CTAS 3: Normal</text>
+  <text x="932" y="546" class="box-text">CTAS 4-5: Non-Urgent</text>
+
+  <rect x="925" y="620" width="150" height="60" class="box queue"/>
+  <text x="949" y="644" class="box-title">Prioritize</text>
+  <text x="941" y="663" class="box-text">urgency + time</text>
+
+  <!-- Dashboard UI -->
+  <rect x="1162" y="190" width="135" height="85" class="box dashboard"/>
+  <text x="1187" y="215" class="box-title">Overview</text>
+  <text x="1181" y="235" class="box-text">total, waiting</text>
+  <text x="1177" y="252" class="box-text">consultation</text>
+
+  <rect x="1162" y="340" width="135" height="85" class="box dashboard"/>
+  <text x="1181" y="365" class="box-title">Priority Queue</text>
+  <text x="1181" y="385" class="box-text">patient, CTAS</text>
+  <text x="1181" y="402" class="box-text">waiting status</text>
+
+  <rect x="1162" y="500" width="135" height="100" class="box dashboard"/>
+  <text x="1187" y="525" class="box-title">Actions</text>
+  <text x="1181" y="546" class="box-text">Notify patient</text>
+  <text x="1181" y="563" class="box-text">Start consult</text>
+  <text x="1181" y="580" class="box-text">Mark completed</text>
+
+  <!-- Feedback Loop -->
+  <rect x="1375" y="190" width="135" height="82" class="box feedback"/>
+  <text x="1402" y="215" class="box-title">Chatbot</text>
+  <text x="1393" y="235" class="box-text">collect patient</text>
+  <text x="1393" y="252" class="box-text">or staff feedback</text>
+
+  <rect x="1375" y="340" width="135" height="82" class="box feedback"/>
+  <text x="1404" y="365" class="box-title">Save</text>
+  <text x="1393" y="385" class="box-text">patient_feedback</text>
+  <text x="1393" y="402" class="box-text">database table</text>
+
+  <rect x="1375" y="505" width="135" height="82" class="box feedback"/>
+  <text x="1396" y="530" class="box-title">Future Visit</text>
+  <text x="1394" y="550" class="box-text">history reused</text>
+  <text x="1394" y="567" class="box-text">by risk agent</text>
+
+  <!-- Main arrows -->
+  <path d="M108 245 L115 245" class="line"/>
+  <path d="M165 270 L165 335" class="line"/>
+  <path d="M140 427 L140 490" class="line"/>
+  <path d="M203 380 C235 380 250 252 282 252" class="line"/>
+  <path d="M345 289 L345 340" class="line"/>
+  <path d="M345 426 L345 500" class="line"/>
+  <path d="M407 538 C435 538 445 256 482 256" class="line"/>
+  <path d="M545 297 L545 355" class="line"/>
+  <path d="M545 437 L545 510" class="line"/>
+  <path d="M607 552 C640 552 648 225 690 225" class="line"/>
+  <path d="M760 265 L760 310" class="line"/>
+  <path d="M760 408 L760 465" class="line"/>
+  <path d="M830 514 C865 514 884 220 925 220" class="line"/>
+  <path d="M1000 255 L1000 315" class="line"/>
+  <path d="M1000 415 L1000 465" class="line"/>
+  <path d="M1000 570 L1000 620" class="line"/>
+  <path d="M1075 650 C1115 650 1125 382 1162 382" class="line"/>
+  <path d="M1229 425 L1229 500" class="thin-line"/>
+  <path d="M1297 550 C1330 550 1340 231 1375 231" class="thin-line"/>
+  <path d="M1442 272 L1442 340" class="line"/>
+  <path d="M1442 422 L1442 505" class="line"/>
+
+  <!-- Feedback and history return -->
+  <path d="M1375 547 C1210 705 745 705 607 552" class="dash-line"/>
+  <text x="865" y="714" class="small">feedback becomes historical context for future risk analysis</text>
+
+  <!-- Footer labels -->
+  <text x="66" y="770" class="note">Prototype scope: Streamlit/Flutter UI can call this backend through FastAPI endpoints.</text>
+  <text x="66" y="790" class="note">Core agent behavior: observe patient data, retrieve memory, reason with LLM, act by assigning queue, and learn from feedback.</text>
+</svg>

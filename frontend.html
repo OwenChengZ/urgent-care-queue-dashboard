@@ -1,0 +1,829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Intelligent Health Informatics Queue Dashboard</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #172033;
+      --muted: #667085;
+      --line: #d9dee8;
+      --primary: #1f5f8b;
+      --primary-soft: #e8f1f8;
+      --danger: #a51d2d;
+      --warning: #9a5b13;
+      --ok: #247a4d;
+      --shadow: 0 8px 28px rgba(23, 32, 51, 0.08);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: var(--primary);
+      color: #ffffff;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    button.secondary {
+      background: #eef2f7;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+
+    button.ghost {
+      background: transparent;
+      color: var(--primary);
+      border: 1px solid #b8cbe0;
+    }
+
+    button.danger {
+      background: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    input,
+    textarea,
+    select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #ffffff;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 7px;
+      color: #344054;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+    }
+
+    .sidebar {
+      background: #ffffff;
+      border-right: 1px solid var(--line);
+      padding: 28px;
+      overflow-y: auto;
+    }
+
+    .brand {
+      margin-bottom: 24px;
+    }
+
+    .brand h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      line-height: 1.2;
+    }
+
+    .brand p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.45;
+      font-size: 14px;
+    }
+
+    .form-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px;
+      background: #fbfcfe;
+    }
+
+    .field {
+      margin-bottom: 14px;
+    }
+
+    .main {
+      padding: 28px;
+      overflow-y: auto;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-start;
+      margin-bottom: 22px;
+    }
+
+    .topbar h2 {
+      margin: 0 0 6px;
+      font-size: 26px;
+    }
+
+    .topbar p {
+      margin: 0;
+      color: var(--muted);
+    }
+
+    .api-box {
+      width: min(440px, 100%);
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(140px, 1fr));
+      gap: 14px;
+      margin-bottom: 22px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+
+    .card .value {
+      font-size: 28px;
+      font-weight: 800;
+      margin-top: 8px;
+    }
+
+    .card .label {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 330px;
+      gap: 18px;
+      align-items: start;
+    }
+
+    .section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px;
+      margin-bottom: 18px;
+      box-shadow: var(--shadow);
+    }
+
+    .section h3 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+
+    .queue-group {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    .queue-title {
+      padding: 12px 14px;
+      background: #f1f4f8;
+      font-weight: 800;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .patient {
+      padding: 14px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+    }
+
+    .patient-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+    }
+
+    .patient-title {
+      font-weight: 800;
+      font-size: 16px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .badge {
+      border-radius: 999px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 800;
+      background: #eef2f7;
+      color: #344054;
+    }
+
+    .badge.ctas-1 { background: #fde2e2; color: #8a1522; }
+    .badge.ctas-2 { background: #ffe8d5; color: #92400e; }
+    .badge.ctas-3 { background: #fef3c7; color: #854d0e; }
+    .badge.ctas-4 { background: #dcfce7; color: #166534; }
+    .badge.ctas-5 { background: #e2e8f0; color: #334155; }
+
+    .summary-text {
+      color: #344054;
+      line-height: 1.45;
+      margin: 0;
+    }
+
+    details {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #fbfcfe;
+    }
+
+    summary {
+      cursor: pointer;
+      font-weight: 800;
+      color: #344054;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .empty {
+      padding: 16px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+    }
+
+    .chart-row {
+      margin-bottom: 12px;
+    }
+
+    .chart-label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 5px;
+      font-size: 13px;
+      color: #344054;
+      font-weight: 700;
+    }
+
+    .bar {
+      height: 10px;
+      background: #eef2f7;
+      border-radius: 999px;
+      overflow: hidden;
+    }
+
+    .bar span {
+      display: block;
+      height: 100%;
+      background: var(--primary);
+      border-radius: 999px;
+    }
+
+    .log {
+      background: #0f172a;
+      color: #dbeafe;
+      padding: 12px;
+      border-radius: 10px;
+      min-height: 70px;
+      white-space: pre-wrap;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      z-index: 10;
+    }
+
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal {
+      width: min(560px, 100%);
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.25);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 16px;
+    }
+
+    .chat-bubble {
+      border-radius: 14px;
+      padding: 12px 14px;
+      background: #f1f5f9;
+      color: #243042;
+      line-height: 1.45;
+      margin-bottom: 14px;
+    }
+
+    .chat-reply {
+      display: none;
+      background: var(--primary-soft);
+      border: 1px solid #c9dcec;
+      border-radius: 14px;
+      padding: 12px 14px;
+      margin-top: 14px;
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1100px) {
+      .app-shell {
+        grid-template-columns: 1fr;
+      }
+
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .grid,
+      .cards {
+        grid-template-columns: 1fr;
+      }
+
+      .topbar {
+        display: block;
+      }
+
+      .api-box {
+        margin-top: 16px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <h1>Intelligent Health Informatics Group 9</h1>
+        <p>AI-supported urgent care check-in, CTAS risk analysis, queue prioritization, and feedback history.</p>
+      </div>
+
+      <form id="checkin-form" class="form-card">
+        <h3>Patient Check-in</h3>
+        <div class="field">
+          <label for="patient-id">Patient ID</label>
+          <input id="patient-id" type="number" min="1" placeholder="Example: 1001" />
+        </div>
+        <div class="field">
+          <label for="name">Patient Name</label>
+          <input id="name" required placeholder="Testing Name 1" />
+        </div>
+        <div class="field">
+          <label for="age">Age</label>
+          <input id="age" type="number" min="0" max="125" required placeholder="45" />
+        </div>
+        <div class="field">
+          <label for="symptoms">Symptom Description</label>
+          <textarea id="symptoms" required placeholder="Describe the current symptoms..."></textarea>
+        </div>
+        <div class="field">
+          <label for="history">Optional Medical History</label>
+          <textarea id="history" placeholder="Known conditions, medications, allergies..."></textarea>
+        </div>
+        <button id="submit-checkin" type="submit">Risk Analysis and Join Queue</button>
+      </form>
+
+      <p class="note" style="margin-top: 16px;">
+        This prototype provides decision support only. It does not replace clinical judgment, diagnosis, or treatment.
+      </p>
+    </aside>
+
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h2>Urgent Care Queue Dashboard</h2>
+          <p>Backend-driven prototype for triage workflow and queue operations.</p>
+        </div>
+        <div class="api-box">
+          <div>
+            <label for="api-base">Backend API</label>
+            <input id="api-base" value="http://127.0.0.1:8001" />
+          </div>
+          <button class="secondary" type="button" onclick="refreshDashboard()">Refresh</button>
+        </div>
+      </div>
+
+      <section class="cards">
+        <div class="card">
+          <div class="label">Total Patients</div>
+          <div id="total-patients" class="value">0</div>
+        </div>
+        <div class="card">
+          <div class="label">Waiting</div>
+          <div id="waiting-patients" class="value">0</div>
+        </div>
+        <div class="card">
+          <div class="label">In Consultation</div>
+          <div id="consultation-patients" class="value">0</div>
+        </div>
+        <div class="card">
+          <div class="label">Completed / Discharged</div>
+          <div id="completed-patients" class="value">0</div>
+        </div>
+      </section>
+
+      <div class="grid">
+        <div>
+          <section class="section">
+            <h3>Priority Queues</h3>
+            <div id="queues"></div>
+          </section>
+
+          <section class="section">
+            <h3>Completed / Discharged</h3>
+            <div id="completed-list" class="empty">No completed patients yet.</div>
+          </section>
+        </div>
+
+        <aside>
+          <section class="section">
+            <h3>Urgency Distribution</h3>
+            <div id="urgency-chart"></div>
+          </section>
+
+          <section class="section">
+            <h3>System Log</h3>
+            <div id="log" class="log">Ready.</div>
+          </section>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <div id="feedback-modal" class="modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin: 0 0 5px;">Feedback Chatbot</h3>
+          <p id="feedback-patient-label" class="meta" style="margin: 0;">Patient feedback</p>
+        </div>
+        <button class="secondary" type="button" onclick="closeFeedback()">Close</button>
+      </div>
+
+      <div class="chat-bubble">
+        Thank you for reviewing this visit. Was the urgency level reasonable for the patient's condition?
+      </div>
+
+      <div class="field">
+        <label for="feedback-rating">Rating</label>
+        <select id="feedback-rating">
+          <option value="Reasonable">Reasonable</option>
+          <option value="Too high">Too high</option>
+          <option value="Too low">Too low</option>
+          <option value="Unsure">Unsure</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label for="feedback-message">Comment</label>
+        <textarea id="feedback-message" placeholder="Add a short comment for future review..."></textarea>
+      </div>
+
+      <button type="button" onclick="submitFeedback()">Submit Feedback</button>
+      <div id="chat-reply" class="chat-reply"></div>
+    </div>
+  </div>
+
+  <script>
+    let selectedPatient = null;
+
+    const queueOrder = ["Emergency Queue", "Normal Queue", "Non-Urgent Queue"];
+    const queueDescriptions = {
+      "Emergency Queue": "CTAS 1-2",
+      "Normal Queue": "CTAS 3",
+      "Non-Urgent Queue": "CTAS 4-5"
+    };
+
+    function apiBase() {
+      return document.getElementById("api-base").value.replace(/\/$/, "");
+    }
+
+    function setLog(message) {
+      document.getElementById("log").textContent = message;
+    }
+
+    async function requestJson(path, options = {}) {
+      const response = await fetch(`${apiBase()}${path}`, {
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+
+      const text = await response.text();
+      let data = {};
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch (error) {
+        data = { message: text };
+      }
+
+      if (!response.ok) {
+        throw new Error(data.detail || data.message || `Request failed: ${response.status}`);
+      }
+
+      return data;
+    }
+
+    function ctasClass(level) {
+      return `ctas-${Number(level) || 5}`;
+    }
+
+    function safeText(value, fallback = "") {
+      return value === undefined || value === null || value === "" ? fallback : String(value);
+    }
+
+    function updateSummary(summary = {}) {
+      document.getElementById("total-patients").textContent = summary.total_patients || 0;
+      document.getElementById("waiting-patients").textContent = summary.waiting || 0;
+      document.getElementById("consultation-patients").textContent = summary.in_consultation || 0;
+      document.getElementById("completed-patients").textContent = summary.completed || 0;
+    }
+
+    function renderQueues(queues = {}) {
+      const container = document.getElementById("queues");
+      container.innerHTML = "";
+
+      queueOrder.forEach((queueName) => {
+        const patients = queues[queueName] || [];
+        const group = document.createElement("div");
+        group.className = "queue-group";
+
+        group.innerHTML = `
+          <div class="queue-title">
+            <span>${queueName}</span>
+            <span>${queueDescriptions[queueName]} - ${patients.length} patient(s)</span>
+          </div>
+        `;
+
+        if (!patients.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "No patients in this queue.";
+          group.appendChild(empty);
+        } else {
+          patients.forEach((patient) => group.appendChild(renderPatient(patient)));
+        }
+
+        container.appendChild(group);
+      });
+    }
+
+    function renderPatient(patient) {
+      const row = document.createElement("article");
+      row.className = "patient";
+
+      row.innerHTML = `
+        <div class="patient-header">
+          <div>
+            <div class="patient-title">${safeText(patient.name, "Unnamed Patient")}</div>
+            <div class="meta">Patient ID: ${safeText(patient.patient_id)} | Age: ${safeText(patient.age)} | Local case #${safeText(patient.id)}</div>
+          </div>
+          <div class="badges">
+            <span class="badge ${ctasClass(patient.ctas_level)}">${safeText(patient.urgency_label)}</span>
+            <span class="badge">Risk Score: ${safeText(patient.risk_score, "N/A")}/10</span>
+            <span class="badge">${safeText(patient.status)}</span>
+            <span class="badge">${safeText(patient.waiting_minutes, 0)} min</span>
+          </div>
+        </div>
+        <p class="summary-text">${safeText(patient.clinical_summary, "No clinical summary available.")}</p>
+        <details>
+          <summary>Reasoning and recommended action</summary>
+          <p class="summary-text"><strong>Reasoning:</strong> ${safeText(patient.reasoning, "No reasoning available.")}</p>
+          <p class="summary-text"><strong>Recommended action:</strong> ${safeText(patient.recommended_action, "No action provided.")}</p>
+        </details>
+        <div class="actions">
+          <button class="ghost" type="button" onclick="patientAction(${patient.id}, 'notify')">Notify Patient</button>
+          <button class="secondary" type="button" onclick="patientAction(${patient.id}, 'start')">Start Consultation</button>
+          <button class="danger" type="button" onclick="patientAction(${patient.id}, 'complete')">Mark as Completed</button>
+          <button class="secondary" type="button" onclick='openFeedback(${JSON.stringify(patient).replace(/'/g, "&apos;")})'>Feedback</button>
+        </div>
+      `;
+
+      return row;
+    }
+
+    function renderCompleted(completed = []) {
+      const container = document.getElementById("completed-list");
+      if (!completed.length) {
+        container.className = "empty";
+        container.textContent = "No completed patients yet.";
+        return;
+      }
+
+      container.className = "";
+      container.innerHTML = completed.map((patient) => `
+        <div class="patient" style="border: 1px solid var(--line); border-radius: 10px; margin-bottom: 10px;">
+          <div class="patient-header">
+            <div>
+              <div class="patient-title">${safeText(patient.name)}</div>
+              <div class="meta">Patient ID: ${safeText(patient.patient_id)} | Completed: ${safeText(patient.completed_at, "N/A")}</div>
+            </div>
+            <span class="badge ${ctasClass(patient.ctas_level)}">${safeText(patient.urgency_label)}</span>
+          </div>
+        </div>
+      `).join("");
+    }
+
+    function renderUrgencyChart(active = [], completed = []) {
+      const all = [...active, ...completed];
+      const counts = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      all.forEach((patient) => {
+        const level = Number(patient.ctas_level);
+        if (counts[level] !== undefined) counts[level] += 1;
+      });
+
+      const max = Math.max(1, ...Object.values(counts));
+      const chart = document.getElementById("urgency-chart");
+      chart.innerHTML = Object.entries(counts).map(([level, count]) => {
+        const width = Math.round((count / max) * 100);
+        return `
+          <div class="chart-row">
+            <div class="chart-label">
+              <span>CTAS Level ${level}</span>
+              <span>${count}</span>
+            </div>
+            <div class="bar"><span style="width: ${width}%"></span></div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    async function refreshDashboard() {
+      try {
+        const [queueData, patientData] = await Promise.all([
+          requestJson("/queues"),
+          requestJson("/patients")
+        ]);
+        updateSummary(queueData.summary);
+        renderQueues(queueData.queues);
+        renderCompleted(patientData.completed || []);
+        renderUrgencyChart(patientData.active || [], patientData.completed || []);
+        setLog("Dashboard refreshed.");
+      } catch (error) {
+        setLog(`Refresh failed: ${error.message}`);
+      }
+    }
+
+    async function patientAction(localId, action) {
+      try {
+        const data = await requestJson(`/patient/${localId}/${action}`, { method: "POST" });
+        setLog(data.message || "Action completed.");
+        await refreshDashboard();
+      } catch (error) {
+        setLog(`Action failed: ${error.message}`);
+      }
+    }
+
+    function openFeedback(patient) {
+      selectedPatient = patient;
+      document.getElementById("feedback-patient-label").textContent =
+        `Patient ID ${patient.patient_id} | CTAS ${patient.ctas_level} | Risk Score ${patient.risk_score}/10`;
+      document.getElementById("feedback-rating").value = "Reasonable";
+      document.getElementById("feedback-message").value = "";
+      document.getElementById("chat-reply").style.display = "none";
+      document.getElementById("chat-reply").textContent = "";
+      document.getElementById("feedback-modal").classList.add("open");
+    }
+
+    function closeFeedback() {
+      document.getElementById("feedback-modal").classList.remove("open");
+      selectedPatient = null;
+    }
+
+    async function submitFeedback() {
+      if (!selectedPatient) return;
+
+      const rating = document.getElementById("feedback-rating").value;
+      const message = document.getElementById("feedback-message").value.trim();
+      const reply = document.getElementById("chat-reply");
+
+      try {
+        await requestJson("/feedback", {
+          method: "POST",
+          body: JSON.stringify({
+            patient_id: selectedPatient.patient_id,
+            rating,
+            message,
+            ctas_level: selectedPatient.ctas_level,
+            risk_score: selectedPatient.risk_score
+          })
+        });
+
+        reply.style.display = "block";
+        reply.textContent = rating === "Reasonable"
+          ? "Thank you. We are glad the urgency level matched your expectation. We hope the patient feels better soon."
+          : "Thank you for the feedback. This case will be kept for clinical review and future system improvement.";
+        setLog("Feedback saved to local history and database API.");
+      } catch (error) {
+        reply.style.display = "block";
+        reply.textContent = `Feedback failed: ${error.message}`;
+        setLog(`Feedback failed: ${error.message}`);
+      }
+    }
+
+    document.getElementById("checkin-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const button = document.getElementById("submit-checkin");
+      button.disabled = true;
+      button.textContent = "Analyzing...";
+
+      const patientIdValue = document.getElementById("patient-id").value;
+      const payload = {
+        name: document.getElementById("name").value.trim(),
+        age: Number(document.getElementById("age").value),
+        symptoms: document.getElementById("symptoms").value.trim(),
+        medical_history: document.getElementById("history").value.trim()
+      };
+
+      if (patientIdValue) {
+        payload.patient_id = Number(patientIdValue);
+      }
+
+      try {
+        const data = await requestJson("/intake", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+
+        setLog(`Check-in completed.\n${data.patient.urgency_label}\nRisk Score: ${data.patient.risk_score}/10\nQueue: ${data.patient.queue_name}`);
+        event.target.reset();
+        await refreshDashboard();
+      } catch (error) {
+        setLog(`Check-in failed: ${error.message}`);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Risk Analysis and Join Queue";
+      }
+    });
+
+    refreshDashboard();
+  </script>
+</body>
+</html>
