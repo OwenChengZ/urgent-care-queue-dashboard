@@ -178,12 +178,14 @@ class _DashboardPageState extends State<DashboardPage> {
   Future<void> submitFeedback(
     Map<String, dynamic> patient,
     String rating,
-    String comment,
+    String queueFeedback,
+    String conditionUpdate,
   ) async {
     final payload = {
       'patient_id': patient['patient_id'],
       'rating': rating,
-      'message': comment,
+      'message': queueFeedback,
+      'condition_update': conditionUpdate,
       'ctas_level': patient['ctas_level'],
       'risk_score': patient['risk_score'],
     };
@@ -225,40 +227,47 @@ class _DashboardPageState extends State<DashboardPage> {
   Widget buildCheckInPanel() {
     return Container(
       color: Colors.white,
-      padding: const EdgeInsets.all(24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Patient Check-in',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 8),
-          const Text(
-            'Flutter frontend calling the FastAPI backend.',
-            style: TextStyle(color: Color(0xFF667085)),
-          ),
-          const SizedBox(height: 22),
-          buildTextField(apiBaseController, 'Backend API'),
-          buildTextField(patientIdController, 'Patient ID', keyboardType: TextInputType.number),
-          buildTextField(nameController, 'Patient Name'),
-          buildTextField(ageController, 'Age', keyboardType: TextInputType.number),
-          buildTextField(symptomsController, 'Symptom Description', maxLines: 4),
-          buildTextField(historyController, 'Optional Medical History', maxLines: 4),
-          const SizedBox(height: 8),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton(
-              onPressed: isLoading ? null : submitCheckIn,
-              child: const Text('Risk Analysis and Join Queue'),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Patient Check-in',
+              style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
             ),
-          ),
-          const SizedBox(height: 18),
-          const Text(
-            'Decision support only. This prototype does not replace doctors, diagnosis, or treatment.',
-            style: TextStyle(color: Color(0xFF667085), height: 1.4),
-          ),
-        ],
+            const SizedBox(height: 8),
+            const Text(
+              'Flutter frontend calling the FastAPI backend.',
+              style: TextStyle(color: Color(0xFF667085)),
+            ),
+            const SizedBox(height: 18),
+            buildTextField(apiBaseController, 'Backend API'),
+            buildTextField(
+              patientIdController,
+              'Patient ID',
+              keyboardType: TextInputType.number,
+              helperText: 'Returning patient? Enter patient ID for longitudinal analysis.',
+            ),
+            buildTextField(nameController, 'Patient Name'),
+            buildTextField(ageController, 'Age', keyboardType: TextInputType.number),
+            buildTextField(symptomsController, 'Symptom Description', maxLines: 4),
+            buildTextField(historyController, 'Optional Medical History', maxLines: 4),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: isLoading ? null : submitCheckIn,
+                child: const Text('Risk Analysis and Join Queue'),
+              ),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Decision support only. This prototype does not replace doctors, diagnosis, or treatment.',
+              style: TextStyle(color: Color(0xFF667085), height: 1.4),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -283,7 +292,7 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                     SizedBox(height: 6),
                     Text(
-                      'DTI6302 AX00 Intelligent Health Informatics Group 9',
+                      'DTI6302 AX00 Intelligent Health Informatics',
                       style: TextStyle(color: Color(0xFF667085)),
                     ),
                   ],
@@ -597,6 +606,7 @@ class _DashboardPageState extends State<DashboardPage> {
     String label, {
     int maxLines = 1,
     TextInputType? keyboardType,
+    String? helperText,
   }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
@@ -606,6 +616,7 @@ class _DashboardPageState extends State<DashboardPage> {
         keyboardType: keyboardType,
         decoration: InputDecoration(
           labelText: label,
+          helperText: helperText,
           border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
         ),
       ),
@@ -637,7 +648,8 @@ class _DashboardPageState extends State<DashboardPage> {
 
   void showFeedbackDialog(Map<String, dynamic> patient) {
     String rating = 'Reasonable';
-    final commentController = TextEditingController();
+    final queueFeedbackController = TextEditingController();
+    final conditionController = TextEditingController();
 
     showDialog(
       context: context,
@@ -669,10 +681,21 @@ class _DashboardPageState extends State<DashboardPage> {
                     ),
                     const SizedBox(height: 12),
                     TextField(
-                      controller: commentController,
+                      controller: queueFeedbackController,
                       maxLines: 4,
                       decoration: const InputDecoration(
-                        labelText: 'Comment',
+                        labelText: 'Queue / urgency feedback',
+                        hintText: 'For example: Was the queue priority or urgency level reasonable?',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: conditionController,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        labelText: 'Current condition update (optional)',
+                        hintText: 'For example: symptoms are worse, new chest pain, dizziness, breathing difficulty...',
                         border: OutlineInputBorder(),
                       ),
                     ),
@@ -684,7 +707,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 FilledButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    submitFeedback(patient, rating, commentController.text.trim());
+                    submitFeedback(
+                      patient,
+                      rating,
+                      queueFeedbackController.text.trim(),
+                      conditionController.text.trim(),
+                    );
                   },
                   child: const Text('Submit Feedback'),
                 ),

@@ -106,7 +106,8 @@ class IntakeRequest(BaseModel):
 class FeedbackRequest(BaseModel):
     patient_id: int
     rating: str = Field(..., description="Reasonable, Too high, Too low, or Unsure")
-    message: str = ""
+    message: str = Field("", description="Feedback about queue experience or urgency level")
+    condition_update: str = Field("", description="Optional patient condition update for alert analysis")
     ctas_level: Optional[int] = None
     risk_score: Optional[int] = None
 
@@ -309,7 +310,7 @@ def call_deepseek_json(prompt: str, system_message: str) -> dict:
 
 def keyword_feedback_alert(request: FeedbackRequest) -> FeedbackAlert:
     """Fallback Feedback Alert Agent when the LLM is unavailable."""
-    text = request.message.lower()
+    text = f"{request.condition_update} {request.message}".lower()
     high_risk_terms = [
         "worse",
         "worsening",
@@ -387,11 +388,13 @@ Current triage context:
 - CTAS level: {request.ctas_level if request.ctas_level is not None else "not provided"}
 - Risk score: {request.risk_score if request.risk_score is not None else "not provided"}
 - Rating: {request.rating}
-- Feedback text: {request.message or "No free-text feedback provided."}
+- Queue/urgency feedback: {request.message or "No queue feedback provided."}
+- Current patient condition update: {request.condition_update or "No condition update provided."}
 
 Task:
-Decide whether the feedback contains signs of symptom worsening, red-flag symptoms,
-under-triage concern, or urgent need for staff review.
+Focus especially on the current patient condition update. Decide whether it contains
+signs of symptom worsening, red-flag symptoms, under-triage concern, or urgent need
+for staff review. Use the queue feedback only as supporting context.
 
 Return JSON only with:
 {{
@@ -656,6 +659,7 @@ def complete_patient(local_patient_id: int) -> dict:
 @app.post("/feedback")
 def save_feedback(request: FeedbackRequest) -> dict:
     feedback_text = request.message.strip()
+    condition_text = request.condition_update.strip()
     alert = feedback_alert_agent(request)
     is_severe = alert.alert_required and alert.severity in {"medium", "high"}
     metadata_text = (
@@ -668,7 +672,10 @@ def save_feedback(request: FeedbackRequest) -> dict:
     database_feedback = {
         "patient_id": request.patient_id,
         "treatment": "Urgent Care Queue Review",
-        "feedback": f"{metadata_text} Feedback: {feedback_text}",
+        "feedback": (
+            f"{metadata_text} Queue Feedback: {feedback_text or 'not provided'} "
+            f"Condition Update: {condition_text or 'not provided'}"
+        ),
         "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "is_severe": str(is_severe).lower(),
         "feedback_type": alert.feedback_type,
@@ -678,6 +685,8 @@ def save_feedback(request: FeedbackRequest) -> dict:
         "rating": request.rating,
         "ctas_level": request.ctas_level,
         "risk_score": request.risk_score,
+        "queue_feedback": feedback_text,
+        "condition_update": condition_text,
         "alert_agent": alert.dict(),
     }
     database_result = save_feedback_to_database(database_feedback, local_feedback)
@@ -691,6 +700,7 @@ def save_feedback(request: FeedbackRequest) -> dict:
             "ctas_level": request.ctas_level,
             "risk_score": request.risk_score,
             "feedback": feedback_text,
+            "condition_update": condition_text,
             **alert.dict(),
         }
         save_feedback_alert(alert_record)

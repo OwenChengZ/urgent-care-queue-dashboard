@@ -101,11 +101,12 @@ def submit_patient_action(local_id: int, action: str) -> None:
         st.error(str(exc))
 
 
-def submit_feedback(patient: Dict[str, Any], rating: str, message: str) -> None:
+def submit_feedback(patient: Dict[str, Any], rating: str, message: str, condition_update: str = "") -> None:
     payload = {
         "patient_id": patient["patient_id"],
         "rating": rating,
         "message": message,
+        "condition_update": condition_update,
         "ctas_level": patient.get("ctas_level"),
         "risk_score": patient.get("risk_score"),
     }
@@ -172,12 +173,17 @@ def render_patient(patient: Dict[str, Any]) -> None:
             key=f"rating-{patient['id']}",
         )
         feedback = st.text_area(
-            "Comment",
-            placeholder="Add a short comment for future review...",
+            "Queue / urgency feedback",
+            placeholder="Was the queue priority or urgency level reasonable?",
             key=f"feedback-{patient['id']}",
         )
+        condition_update = st.text_area(
+            "Current condition update (optional)",
+            placeholder="Describe any worsening symptoms or new concerns...",
+            key=f"condition-{patient['id']}",
+        )
         if st.button("Submit Feedback", key=f"submit-feedback-{patient['id']}"):
-            submit_feedback(patient, rating, feedback)
+            submit_feedback(patient, rating, feedback, condition_update)
 
 
 def render_completed(completed: List[Dict[str, Any]]) -> None:
@@ -211,7 +217,12 @@ with st.sidebar:
     st.text_input("Backend API", value=DEFAULT_API_BASE, key="api_base")
 
     with st.form("checkin-form"):
-        patient_id = st.number_input("Patient ID", min_value=0, value=0)
+        patient_id = st.number_input(
+            "Patient ID",
+            min_value=0,
+            value=0,
+            help="If this is a returning patient, enter the patient ID for longitudinal analysis.",
+        )
         name = st.text_input("Patient Name", placeholder="Testing Name 1")
         age = st.number_input("Age", min_value=0, max_value=125, value=35)
         symptoms = st.text_area("Symptom Description", placeholder="Describe current symptoms...")
@@ -250,7 +261,7 @@ with st.sidebar:
 
 
 st.title("Urgent Care Queue Dashboard")
-st.caption("DTI6302 AX00 Intelligent Health Informatics Group 9")
+st.caption("DTI6302 AX00 Intelligent Health Informatics")
 
 top_col1, top_col2 = st.columns([1, 0.2])
 with top_col2:
