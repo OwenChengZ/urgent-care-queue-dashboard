@@ -35,6 +35,7 @@ DATA_DIR = Path(os.getenv("SMART_SCHEDULING_DATA_DIR", Path(__file__).with_name(
 PATIENT_FILE = DATA_DIR / "patients.json"
 COMPLETED_FILE = DATA_DIR / "completed_patients.json"
 LOCAL_FEEDBACK_FILE = DATA_DIR / "feedback_log.json"
+ALERT_FILE = DATA_DIR / "feedback_alerts.json"
 
 STATUS_WAITING = "Waiting"
 STATUS_CONSULTATION = "In Consultation"
@@ -108,6 +109,15 @@ class FeedbackRequest(BaseModel):
     message: str = ""
     ctas_level: Optional[int] = None
     risk_score: Optional[int] = None
+
+
+class FeedbackAlert(BaseModel):
+    alert_required: bool
+    severity: str = "none"
+    alert_reason: str = ""
+    recommended_staff_action: str = ""
+    patient_message: str = ""
+    feedback_type: str = "triage_review"
 
 
 app = FastAPI(title="Urgent Care Queue Dashboard Backend")
@@ -297,6 +307,123 @@ def call_deepseek_json(prompt: str, system_message: str) -> dict:
         raise HTTPException(status_code=502, detail="DeepSeek response could not be parsed as JSON.") from exc
 
 
+def keyword_feedback_alert(request: FeedbackRequest) -> FeedbackAlert:
+    """Fallback Feedback Alert Agent when the LLM is unavailable."""
+    text = request.message.lower()
+    high_risk_terms = [
+        "worse",
+        "worsening",
+        "chest pain",
+        "shortness of breath",
+        "can't breathe",
+        "cannot breathe",
+        "faint",
+        "fainted",
+        "passed out",
+        "seizure",
+        "bleeding",
+        "severe pain",
+        "stroke",
+        "weakness",
+        "numbness",
+        "confused",
+        "suicidal",
+        "oxygen",
+    ]
+    mismatch_terms = ["too low", "undertriaged", "not urgent enough", "waited too long"]
+    has_high_risk_term = any(term in text for term in high_risk_terms)
+    has_mismatch = request.rating in {"Too low", "Unsure"} or any(term in text for term in mismatch_terms)
+
+    if has_high_risk_term:
+        return FeedbackAlert(
+            alert_required=True,
+            severity="high",
+            alert_reason="Feedback contains possible symptom worsening or red-flag language.",
+            recommended_staff_action="Ask clinical staff to reassess the patient as soon as possible.",
+            patient_message=(
+                "Thank you for telling us. Your feedback suggests symptoms may need prompt review, "
+                "so staff should reassess the case."
+            ),
+            feedback_type="symptom_alert",
+        )
+
+    if has_mismatch:
+        return FeedbackAlert(
+            alert_required=True,
+            severity="medium",
+            alert_reason="Feedback suggests the urgency level may not have matched the patient's condition.",
+            recommended_staff_action="Flag this case for staff review and future triage quality improvement.",
+            patient_message=(
+                "Thank you for the feedback. This case will be flagged for clinical review and system improvement."
+            ),
+            feedback_type="urgency_mismatch",
+        )
+
+    return FeedbackAlert(
+        alert_required=False,
+        severity="none",
+        alert_reason="No immediate clinical warning signs were detected in the feedback.",
+        recommended_staff_action="Store feedback for future visit context.",
+        patient_message=(
+            "Thank you. We are glad the urgency level matched your expectation. "
+            "We hope the patient feels better soon."
+        ),
+        feedback_type="triage_review",
+    )
+
+
+def feedback_alert_agent(request: FeedbackRequest) -> FeedbackAlert:
+    """Feedback Alert Agent: analyze feedback and decide whether staff should be warned."""
+    fallback = keyword_feedback_alert(request)
+    if not DEEPSEEK_API_KEY:
+        return fallback
+
+    prompt = f"""
+You are a healthcare feedback alert agent for an urgent care triage system.
+Analyze the patient/staff feedback after check-in.
+
+Current triage context:
+- Patient ID: {request.patient_id}
+- CTAS level: {request.ctas_level if request.ctas_level is not None else "not provided"}
+- Risk score: {request.risk_score if request.risk_score is not None else "not provided"}
+- Rating: {request.rating}
+- Feedback text: {request.message or "No free-text feedback provided."}
+
+Task:
+Decide whether the feedback contains signs of symptom worsening, red-flag symptoms,
+under-triage concern, or urgent need for staff review.
+
+Return JSON only with:
+{{
+  "alert_required": true or false,
+  "severity": "none", "low", "medium", or "high",
+  "alert_reason": "short reason",
+  "recommended_staff_action": "short action for clinic staff",
+  "patient_message": "brief patient-facing reply in English",
+  "feedback_type": "triage_review", "urgency_mismatch", "symptom_alert", or "service_experience"
+}}
+
+This is decision support only and does not diagnose or treat.
+"""
+    system_message = "You are a concise clinical safety feedback agent. Return valid JSON only."
+
+    try:
+        result = call_deepseek_json(prompt, system_message)
+        alert = FeedbackAlert(**result)
+    except Exception:
+        return fallback
+
+    if fallback.alert_required and not alert.alert_required:
+        return fallback
+    return alert
+
+
+def save_feedback_alert(alert_record: dict) -> None:
+    alerts = load_json_list(ALERT_FILE)
+    alerts.append(alert_record)
+    save_json_list(ALERT_FILE, alerts)
+
+
 def risk_analysis_agent(request: IntakeRequest, history_rows: List[dict]) -> dict:
     history_text = format_history_for_prompt(history_rows)
     prompt = f"""
@@ -484,6 +611,11 @@ def get_local_feedback() -> dict:
     return {"feedback": load_json_list(LOCAL_FEEDBACK_FILE)}
 
 
+@app.get("/alerts")
+def get_feedback_alerts() -> dict:
+    return {"alerts": load_json_list(ALERT_FILE)}
+
+
 @app.post("/patient/{local_patient_id}/notify")
 def notify_patient(local_patient_id: int) -> dict:
     patients = load_patients()
@@ -524,28 +656,49 @@ def complete_patient(local_patient_id: int) -> dict:
 @app.post("/feedback")
 def save_feedback(request: FeedbackRequest) -> dict:
     feedback_text = request.message.strip()
+    alert = feedback_alert_agent(request)
+    is_severe = alert.alert_required and alert.severity in {"medium", "high"}
     metadata_text = (
         f"Rating: {request.rating}; "
         f"CTAS Level: {request.ctas_level if request.ctas_level is not None else 'not provided'}; "
-        f"Risk Score: {request.risk_score if request.risk_score is not None else 'not provided'}."
+        f"Risk Score: {request.risk_score if request.risk_score is not None else 'not provided'}; "
+        f"Alert Required: {alert.alert_required}; "
+        f"Alert Severity: {alert.severity}."
     )
     database_feedback = {
         "patient_id": request.patient_id,
         "treatment": "Urgent Care Queue Review",
         "feedback": f"{metadata_text} Feedback: {feedback_text}",
         "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "is_severe": "false",
-        "feedback_type": "triage_review",
+        "is_severe": str(is_severe).lower(),
+        "feedback_type": alert.feedback_type,
     }
     local_feedback = {
         **database_feedback,
         "rating": request.rating,
         "ctas_level": request.ctas_level,
         "risk_score": request.risk_score,
+        "alert_agent": alert.dict(),
     }
     database_result = save_feedback_to_database(database_feedback, local_feedback)
+
+    alert_record = None
+    if alert.alert_required:
+        alert_record = {
+            "patient_id": request.patient_id,
+            "datetime": database_feedback["datetime"],
+            "rating": request.rating,
+            "ctas_level": request.ctas_level,
+            "risk_score": request.risk_score,
+            "feedback": feedback_text,
+            **alert.dict(),
+        }
+        save_feedback_alert(alert_record)
+
     return {
-        "message": "Feedback saved. It will be used as history for future risk analysis.",
+        "message": "Feedback saved and analyzed by the Feedback Alert Agent.",
         "feedback": local_feedback,
+        "alert_agent": alert.dict(),
+        "alert": alert_record,
         "database": database_result,
     }

@@ -59,6 +59,13 @@ def load_dashboard() -> tuple[Dict[str, Any], Dict[str, Any]]:
     return queues, patients
 
 
+def load_alerts() -> List[Dict[str, Any]]:
+    try:
+        return api_request("GET", "/alerts").get("alerts", [])
+    except RuntimeError:
+        return []
+
+
 def urgency_badge(level: int, label: str) -> str:
     colors = {
         1: ("#fde2e2", "#8a1522"),
@@ -103,17 +110,16 @@ def submit_feedback(patient: Dict[str, Any], rating: str, message: str) -> None:
         "risk_score": patient.get("risk_score"),
     }
     try:
-        api_request("POST", "/feedback", json=payload)
-        if rating == "Reasonable":
-            st.success(
-                "Thank you. We are glad the urgency level matched your expectation. "
-                "We hope the patient feels better soon."
+        result = api_request("POST", "/feedback", json=payload)
+        alert = result.get("alert_agent", {})
+        if alert.get("alert_required"):
+            st.warning(
+                f"Feedback Alert Agent: {alert.get('severity', 'unknown').title()} alert. "
+                f"{alert.get('recommended_staff_action', 'Staff review recommended.')}"
             )
         else:
-            st.info(
-                "Thank you for the feedback. This case will be kept for clinical review "
-                "and future system improvement."
-            )
+            st.success(alert.get("patient_message", "Feedback saved."))
+        refresh()
     except RuntimeError as exc:
         st.error(str(exc))
 
@@ -293,6 +299,18 @@ with side_col:
         for level in levels
     }
     st.bar_chart(counts)
+
+    st.header("Feedback Alerts")
+    alerts = list(reversed(load_alerts()))[:5]
+    if not alerts:
+        st.caption("No active feedback alerts.")
+    for alert in alerts:
+        severity = str(alert.get("severity", "unknown")).title()
+        with st.container(border=True):
+            st.markdown(f"**{severity} Alert - Patient ID {alert.get('patient_id')}**")
+            st.caption(alert.get("datetime", "No timestamp"))
+            st.write(alert.get("alert_reason", "No alert reason provided."))
+            st.info(alert.get("recommended_staff_action", "Staff review recommended."))
 
     st.header("Backend Status")
     try:
