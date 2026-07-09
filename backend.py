@@ -16,6 +16,7 @@ Run:
 import http.client
 import json
 import os
+import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,11 @@ from pydantic import BaseModel, Field
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 DATABASE_API_URL = os.getenv("DATABASE_API_URL", "https://aetab8pjmb.us-east-1.awsapprunner.com")
+HEALTHCARE_RECORDS_TABLE = os.getenv("HEALTHCARE_RECORDS_TABLE", "healthcare_records")
+FEEDBACK_TABLE = os.getenv("FEEDBACK_TABLE", "patient_feedback")
+PATIENTS_REGISTRATION_TABLE = os.getenv("PATIENTS_REGISTRATION_TABLE", "patients_registration")
+MEDICAL_HISTORY_TABLE = os.getenv("MEDICAL_HISTORY_TABLE", "medical_history")
+BACKEND_VERSION = "2026-07-09-timezone-debug"
 
 DATA_DIR = Path(os.getenv("SMART_SCHEDULING_DATA_DIR", Path(__file__).with_name("Feedback_Data")))
 PATIENT_FILE = DATA_DIR / "patients.json"
@@ -39,7 +45,8 @@ ALERT_FILE = DATA_DIR / "feedback_alerts.json"
 
 STATUS_WAITING = "Waiting"
 STATUS_CONSULTATION = "In Consultation"
-STATUS_COMPLETED = "Completed / Discharged"
+STATUS_COMPLETED = "Completed"
+LEGACY_COMPLETED_STATUS = "Completed / Discharged"
 
 QUEUE_EMERGENCY = "Emergency Queue"
 QUEUE_NORMAL = "Normal Queue"
@@ -99,6 +106,7 @@ class IntakeRequest(BaseModel):
     )
     name: str = Field(..., min_length=1)
     age: int = Field(..., ge=0, le=125)
+    gender: str = Field("Other", description="Male, Female, or Other")
     symptoms: str = Field(..., min_length=1)
     medical_history: str = ""
 
@@ -119,6 +127,7 @@ class FeedbackAlert(BaseModel):
     recommended_staff_action: str = ""
     patient_message: str = ""
     feedback_type: str = "triage_review"
+    agent_source: str = "keyword_safety_fallback"
 
 
 app = FastAPI(title="Urgent Care Queue Dashboard Backend")
@@ -150,10 +159,16 @@ def save_json_list(path: Path, rows: List[dict]) -> None:
 
 def patient_from_dict(row: dict) -> Patient:
     fields = Patient.__dataclass_fields__.keys()
-    return Patient(**{key: row[key] for key in fields if key in row})
+    payload = {key: row[key] for key in fields if key in row}
+    if payload.get("status") == LEGACY_COMPLETED_STATUS:
+        payload["status"] = STATUS_COMPLETED
+    return Patient(**payload)
 
 
 def load_patients() -> List[Patient]:
+    database_records = load_healthcare_records_from_database()
+    if database_records is not None:
+        return [patient for patient in database_records if patient.status != STATUS_COMPLETED]
     return [patient_from_dict(row) for row in load_json_list(PATIENT_FILE)]
 
 
@@ -161,12 +176,31 @@ def save_patients(patients: List[Patient]) -> None:
     save_json_list(PATIENT_FILE, [asdict(patient) for patient in patients])
 
 
+def try_save_patients(patients: List[Patient]) -> dict:
+    try:
+        save_patients(patients)
+        return {"saved_locally": True}
+    except Exception as exc:
+        return {"saved_locally": False, "error": str(exc)}
+
+
 def load_completed_patients() -> List[Patient]:
+    database_records = load_healthcare_records_from_database()
+    if database_records is not None:
+        return [patient for patient in database_records if patient.status == STATUS_COMPLETED]
     return [patient_from_dict(row) for row in load_json_list(COMPLETED_FILE)]
 
 
 def save_completed_patients(patients: List[Patient]) -> None:
     save_json_list(COMPLETED_FILE, [asdict(patient) for patient in patients])
+
+
+def try_save_completed_patients(patients: List[Patient]) -> dict:
+    try:
+        save_completed_patients(patients)
+        return {"saved_locally": True}
+    except Exception as exc:
+        return {"saved_locally": False, "error": str(exc)}
 
 
 def next_local_id(patients: List[Patient], completed: List[Patient]) -> int:
@@ -178,14 +212,17 @@ def parse_dt(value: Optional[str]) -> datetime:
     if not value:
         return datetime.now()
     try:
-        return datetime.fromisoformat(value)
-    except ValueError:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
         return datetime.now()
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
 
 
 def waiting_minutes(patient: Patient) -> int:
     start = parse_dt(patient.checked_in_at)
-    end = parse_dt(patient.consultation_started_at) if patient.consultation_started_at else datetime.now()
+    end = parse_dt(patient.consultation_started_at) if patient.consultation_started_at else parse_dt(None)
     return max(0, int((end - start).total_seconds() // 60))
 
 
@@ -200,34 +237,298 @@ def database_url(path: str) -> str:
     return f"{DATABASE_API_URL.rstrip('/')}/{path.lstrip('/')}"
 
 
+def db_get_table(table_name: str) -> List[dict]:
+    response = requests.get(database_url(f"/table/{table_name}"), timeout=12)
+    response.raise_for_status()
+    data = response.json()
+    rows = data.get("data", [])
+    return rows if isinstance(rows, list) else []
+
+
+def db_create_row(table_name: str, payload: dict) -> dict:
+    response = requests.post(database_url(f"/table/{table_name}"), json=payload, timeout=12)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise RuntimeError(f"{response.status_code} {response.text}") from exc
+    return response.json()
+
+
+def db_update_row(table_name: str, row_id: int, payload: dict) -> dict:
+    response = requests.put(database_url(f"/table/{table_name}/{row_id}"), json=payload, timeout=12)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise RuntimeError(f"{response.status_code} {response.text}") from exc
+    return response.json()
+
+
+def age_from_dob(dob: Optional[str]) -> int:
+    if not dob:
+        return 0
+    try:
+        birth_date = datetime.fromisoformat(str(dob).split("T")[0])
+    except ValueError:
+        return 0
+    today = datetime.now()
+    return max(0, today.year - birth_date.year - ((today.month, today.day) < (birth_date.month, birth_date.day)))
+
+
+def approximate_dob_from_age(age: int) -> str:
+    year = datetime.now().year - age
+    return f"{year}-01-01"
+
+
+def load_patient_registration_map() -> Dict[int, dict]:
+    try:
+        rows = db_get_table(PATIENTS_REGISTRATION_TABLE)
+    except Exception:
+        return {}
+    profiles: Dict[int, dict] = {}
+    for row in rows:
+        try:
+            profiles[int(row.get("patient_id"))] = row
+        except (TypeError, ValueError):
+            continue
+    return profiles
+
+
+def ensure_patient_registration(patient_id: int, name: str, age: int, gender: str) -> dict:
+    profiles = load_patient_registration_map()
+    if patient_id in profiles:
+        return {"registered": True, "created": False, "patient": profiles[patient_id]}
+
+    normalized_gender = gender if gender in {"Male", "Female", "Other"} else "Other"
+    payload = {
+        "patient_id": patient_id,
+        "name": name.strip(),
+        "dob": approximate_dob_from_age(age),
+        "gender": normalized_gender,
+        "contact_info": "Not provided",
+    }
+    try:
+        result = db_create_row(PATIENTS_REGISTRATION_TABLE, payload)
+        return {"registered": True, "created": True, "database_response": result}
+    except Exception as exc:
+        return {"registered": False, "created": False, "error": str(exc), "attempted_payload": payload}
+
+
+def patient_from_healthcare_record(row: dict, profile: Optional[dict] = None) -> Patient:
+    ctas_level = int(row.get("ctas_urgency_level") or row.get("ctas_level") or 5)
+    risk_score = int(row.get("risk_score") or fallback_risk_score_from_ctas(ctas_level))
+    record_id = int(row.get("record_id") or row.get("id") or row.get("patient_id") or 0)
+    patient_id = int(row.get("patient_id") or record_id)
+    profile = profile or {}
+    status = str(row.get("status") or STATUS_WAITING)
+    if status == LEGACY_COMPLETED_STATUS:
+        status = STATUS_COMPLETED
+    return Patient(
+        id=record_id,
+        patient_id=patient_id,
+        name=str(profile.get("name") or row.get("name") or f"Patient {patient_id}"),
+        age=age_from_dob(profile.get("dob")) or int(row.get("age") or 0),
+        symptoms=str(row.get("symptoms") or ""),
+        medical_history=str(row.get("medical_history") or ""),
+        ctas_level=ctas_level,
+        risk_score=risk_score,
+        queue_name=str(row.get("queue_name") or queue_name_for_ctas(ctas_level)),
+        clinical_summary=str(row.get("clinical_summary") or ""),
+        reasoning=str(row.get("reasoning") or "Reasoning is summarized in the clinical summary and recommended action."),
+        recommended_action=str(row.get("recommended_action") or ""),
+        status=status,
+        checked_in_at=str(row.get("check_in_time") or row.get("checked_in_at") or datetime.now().isoformat(timespec="seconds")),
+        consultation_started_at=row.get("consultation_started_at"),
+        completed_at=row.get("completed_at"),
+    )
+
+
+def patient_to_healthcare_record(patient: Patient) -> dict:
+    return {
+        "patient_id": patient.patient_id,
+        "symptoms": patient.symptoms,
+        "ctas_urgency_level": patient.ctas_level,
+        "risk_score": patient.risk_score,
+        "queue_name": patient.queue_name,
+        "status": patient.status,
+        "clinical_summary": patient.clinical_summary,
+        "recommended_action": patient.recommended_action,
+        "check_in_time": patient.checked_in_at,
+        "consultation_started_at": patient.consultation_started_at,
+        "completed_at": patient.completed_at,
+    }
+
+
+def load_healthcare_records_from_database() -> Optional[List[Patient]]:
+    try:
+        rows = db_get_table(HEALTHCARE_RECORDS_TABLE)
+        profiles = load_patient_registration_map()
+        return [
+            patient_from_healthcare_record(row, profiles.get(int(row.get("patient_id") or 0)))
+            for row in rows
+        ]
+    except Exception:
+        return None
+
+
+def find_record_id_in_response(value) -> Optional[int]:
+    if isinstance(value, dict):
+        for key in ("record_id", "id"):
+            if value.get(key) is not None:
+                try:
+                    return int(value[key])
+                except (TypeError, ValueError):
+                    pass
+        for child in value.values():
+            found = find_record_id_in_response(child)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for item in value:
+            found = find_record_id_in_response(item)
+            if found is not None:
+                return found
+    return None
+
+
+def refresh_record_id_from_database(patient: Patient) -> Optional[int]:
+    try:
+        rows = db_get_table(HEALTHCARE_RECORDS_TABLE)
+    except Exception:
+        return None
+
+    candidates = []
+    for row in rows:
+        symptoms_match = str(row.get("symptoms") or "") == patient.symptoms
+        patient_match = str(row.get("patient_id") or "") == str(patient.patient_id)
+        time_match = str(row.get("check_in_time") or row.get("checked_in_at") or "").startswith(
+            patient.checked_in_at[:19]
+        )
+        if symptoms_match and (patient_match or time_match):
+            candidates.append(row)
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda row: parse_dt(str(row.get("check_in_time") or row.get("checked_in_at") or "")),
+        reverse=True,
+    )
+    try:
+        return int(candidates[0]["record_id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def create_healthcare_record(patient: Patient) -> dict:
+    try:
+        result = db_create_row(HEALTHCARE_RECORDS_TABLE, patient_to_healthcare_record(patient))
+        record_id = find_record_id_in_response(result) or refresh_record_id_from_database(patient)
+        if record_id is not None:
+            patient.id = record_id
+        return {"saved_to_database": True, "record_id": patient.id, "database_response": result}
+    except Exception as exc:
+        return {"saved_to_database": False, "error": str(exc)}
+
+
+def save_medical_history_note(patient: Patient) -> dict:
+    if not patient.medical_history.strip():
+        return {"saved_to_database": False, "skipped": True, "reason": "No medical history provided."}
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    payload = {
+        "patient_id": patient.patient_id,
+        "diagnosed_by": "Patient self-report",
+        "condition": "Patient-reported medical history",
+        "status": "Active",
+        "severity": "Unspecified",
+        "diagnosis_date": now,
+        "notes": patient.medical_history,
+        "treatment_given": "",
+        "followup_required": "false",
+        "last_updated": now,
+    }
+    try:
+        result = db_create_row(MEDICAL_HISTORY_TABLE, payload)
+        return {"saved_to_database": True, "database_response": result}
+    except Exception as exc:
+        return {"saved_to_database": False, "error": str(exc)}
+
+
+def update_healthcare_record(record_id: int, payload: dict) -> dict:
+    try:
+        result = db_update_row(HEALTHCARE_RECORDS_TABLE, record_id, payload)
+        return {"updated_database": True, "database_response": result}
+    except Exception as exc:
+        return {"updated_database": False, "error": str(exc)}
+
+
+def current_record_for_patient(patient_id: int) -> Optional[Patient]:
+    records = load_healthcare_records_from_database()
+    if not records:
+        records = load_patients() + load_completed_patients()
+    matches = [record for record in records if record.patient_id == patient_id]
+    if not matches:
+        return None
+    matches.sort(key=lambda record: parse_dt(record.checked_in_at), reverse=True)
+    return matches[0]
+
+
 def fetch_patient_history(patient_id: int, limit: int = 5) -> List[dict]:
-    """Read previous feedback records from the professor-provided database API."""
-    sql_payload = {
+    """Read previous visit and feedback records from the E-hospital database API."""
+    records_sql = {
         "sql": (
-            "SELECT * FROM patient_feedback "
+            f"SELECT * FROM {HEALTHCARE_RECORDS_TABLE} "
             "WHERE patient_id = :patient_id "
-            "ORDER BY datetime DESC "
+            "ORDER BY check_in_time DESC "
             "LIMIT :limit"
         ),
         "replacements": {"patient_id": patient_id, "limit": limit},
     }
+    history_rows: List[dict] = []
     try:
-        response = requests.post(database_url("/sql/select"), json=sql_payload, timeout=12)
+        response = requests.post(database_url("/sql/select"), json=records_sql, timeout=12)
         response.raise_for_status()
-        data = response.json()
-        rows = data.get("data", [])
-        return rows if isinstance(rows, list) else []
+        record_rows = response.json().get("data", [])
+        record_ids = []
+        if isinstance(record_rows, list):
+            for row in record_rows:
+                row["_history_source"] = "healthcare_record"
+                history_rows.append(row)
+                if row.get("record_id") is not None:
+                    record_ids.append(row["record_id"])
+        for record_id in record_ids[:limit]:
+            feedback_sql = {
+                "sql": (
+                    f"SELECT * FROM {FEEDBACK_TABLE} "
+                    "WHERE record_id = :record_id "
+                    "ORDER BY created_time DESC "
+                    "LIMIT :limit"
+                ),
+                "replacements": {"record_id": record_id, "limit": limit},
+            }
+            feedback_response = requests.post(database_url("/sql/select"), json=feedback_sql, timeout=12)
+            feedback_response.raise_for_status()
+            feedback_rows = feedback_response.json().get("data", [])
+            if isinstance(feedback_rows, list):
+                for row in feedback_rows:
+                    row["_history_source"] = "feedback"
+                    history_rows.append(row)
+        return history_rows
     except Exception:
         # Fallback for deployments where /sql/select is unavailable.
         try:
-            response = requests.get(database_url("/table/patient_feedback"), timeout=12)
-            response.raise_for_status()
-            data = response.json()
-            rows = data.get("data", [])
-            if not isinstance(rows, list):
-                return []
-            matches = [row for row in rows if str(row.get("patient_id")) == str(patient_id)]
-            return sorted(matches, key=lambda row: str(row.get("datetime", "")), reverse=True)[:limit]
+            feedback_rows = db_get_table(FEEDBACK_TABLE)
+            record_rows = db_get_table(HEALTHCARE_RECORDS_TABLE)
+            record_ids = set()
+            for row in record_rows:
+                if str(row.get("patient_id")) == str(patient_id):
+                    row["_history_source"] = "healthcare_record"
+                    history_rows.append(row)
+                    record_ids.add(str(row.get("record_id")))
+            for row in feedback_rows:
+                if str(row.get("record_id")) in record_ids:
+                    row["_history_source"] = "feedback"
+                    history_rows.append(row)
+            return history_rows[: limit * 2]
         except Exception:
             return []
 
@@ -239,28 +540,42 @@ def save_feedback_to_database(feedback: dict, local_feedback: Optional[dict] = N
     save_json_list(LOCAL_FEEDBACK_FILE, local_rows)
 
     try:
-        response = requests.post(database_url("/table/patient_feedback"), json=feedback, timeout=12)
-        response.raise_for_status()
-        return {"saved_to_database": True, "database_response": response.json()}
+        result = db_create_row(FEEDBACK_TABLE, feedback)
+        return {"saved_to_database": True, "database_response": result}
     except Exception as exc:
         return {"saved_to_database": False, "error": str(exc)}
 
 
 def format_history_for_prompt(history_rows: List[dict]) -> str:
     if not history_rows:
-        return "No previous feedback records found."
+        return "No previous visit or feedback records found."
 
     lines = []
     for row in history_rows:
-        date = row.get("datetime") or row.get("created_at") or "unknown date"
-        feedback = row.get("feedback") or row.get("message") or row.get("comment") or ""
-        rating = row.get("rating") or row.get("feedback_type") or ""
-        severe = row.get("is_severe")
-        detail = f"- {date}: {feedback}"
-        if rating:
-            detail += f" | feedback type/rating: {rating}"
-        if severe is not None:
-            detail += f" | severe: {severe}"
+        source = row.get("_history_source", "record")
+        if source == "healthcare_record":
+            date = row.get("check_in_time") or "unknown date"
+            detail = (
+                f"- Previous visit on {date}: symptoms={row.get('symptoms', '')}; "
+                f"CTAS={row.get('ctas_urgency_level', 'unknown')}; "
+                f"risk_score={row.get('risk_score', 'unknown')}; "
+                f"summary={row.get('clinical_summary', '')}; "
+                f"recommended_action={row.get('recommended_action', '')}; "
+                f"status={row.get('status', '')}"
+            )
+        else:
+            date = row.get("created_time") or row.get("datetime") or row.get("created_at") or "unknown date"
+            feedback = row.get("feedback_message") or row.get("feedback") or row.get("message") or row.get("comment") or ""
+            condition = row.get("condition_update") or ""
+            rating = row.get("rating") or ""
+            alert_required = row.get("alert_required")
+            detail = f"- Feedback on {date}: rating={rating}; feedback={feedback}; condition_update={condition}"
+            if alert_required is not None:
+                detail += (
+                    f" | alert_required={alert_required}; "
+                    f"alert_severity={row.get('alert_severity', '')}; "
+                    f"alert_reason={row.get('alert_reason', '')}"
+                )
         lines.append(detail)
     return "\n".join(lines)
 
@@ -318,6 +633,14 @@ def keyword_feedback_alert(request: FeedbackRequest) -> FeedbackAlert:
         "shortness of breath",
         "can't breathe",
         "cannot breathe",
+        "can't speak",
+        "cannot speak",
+        "cant speak",
+        "unable to speak",
+        "trouble speaking",
+        "difficulty speaking",
+        "need help",
+        "need assistance",
         "faint",
         "fainted",
         "passed out",
@@ -396,6 +719,14 @@ Focus especially on the current patient condition update. Decide whether it cont
 signs of symptom worsening, red-flag symptoms, under-triage concern, or urgent need
 for staff review. Use the queue feedback only as supporting context.
 
+Trigger an alert when the update suggests acute deterioration or immediate staff review,
+including but not limited to: cannot speak, trouble speaking, cannot breathe, shortness
+of breath, chest pain, fainting, confusion, severe pain, bleeding, seizure, stroke-like
+symptoms, suicidal thoughts, or the patient explicitly asks for urgent help.
+
+Do not require exact keyword matches. Infer risk from the meaning of the patient's words.
+When uncertain, be conservative and recommend staff review.
+
 Return JSON only with:
 {{
   "alert_required": true or false,
@@ -403,7 +734,8 @@ Return JSON only with:
   "alert_reason": "short reason",
   "recommended_staff_action": "short action for clinic staff",
   "patient_message": "brief patient-facing reply in English",
-  "feedback_type": "triage_review", "urgency_mismatch", "symptom_alert", or "service_experience"
+  "feedback_type": "triage_review", "urgency_mismatch", "symptom_alert", or "service_experience",
+  "agent_source": "deepseek_feedback_alert_agent"
 }}
 
 This is decision support only and does not diagnose or treat.
@@ -418,6 +750,7 @@ This is decision support only and does not diagnose or treat.
 
     if fallback.alert_required and not alert.alert_required:
         return fallback
+    alert.agent_source = "deepseek_feedback_alert_agent"
     return alert
 
 
@@ -517,8 +850,10 @@ def summary_payload(patients: List[Patient], completed: List[Patient]) -> dict:
     ctas_counts = {str(level): 0 for level in CTAS_LEVELS}
     for patient in patients + completed:
         ctas_counts[str(patient.ctas_level)] += 1
+    total_patients = len(patients) + len(completed)
     return {
-        "total": len(patients) + len(completed),
+        "total": total_patients,
+        "total_patients": total_patients,
         "waiting": sum(1 for patient in patients if patient.status == STATUS_WAITING),
         "in_consultation": sum(1 for patient in patients if patient.status == STATUS_CONSULTATION),
         "completed": len(completed),
@@ -533,12 +868,85 @@ def get_patient_or_404(patient_id: int, patients: List[Patient]) -> Patient:
     raise HTTPException(status_code=404, detail="Patient not found.")
 
 
+def patient_access_token(patient: Patient) -> str:
+    return f"patient-{patient.id}-{patient.patient_id}"
+
+
+def estimated_wait_range(patients_ahead: int) -> str:
+    low = patients_ahead * 10
+    high = low + 15
+    if patients_ahead == 0:
+        return "Soon / next available"
+    return f"{low}-{high} minutes"
+
+
+def patient_status_payload(patient: Patient) -> dict:
+    patients = load_patients()
+    completed = load_completed_patients()
+    queue_number = None
+    patients_ahead = 0
+
+    if patient.status != STATUS_COMPLETED:
+        global_queue = [
+            row
+            for row in patients
+            if row.status in (STATUS_WAITING, STATUS_CONSULTATION)
+        ]
+        global_queue.sort(
+            key=lambda row: (
+                row.ctas_level,
+                -row.risk_score,
+                parse_dt(row.checked_in_at),
+            )
+        )
+        for index, row in enumerate(global_queue, start=1):
+            if row.id == patient.id:
+                queue_number = index
+                patients_ahead = max(0, index - 1)
+                break
+
+    return {
+        "local_patient_id": patient.id,
+        "patient_id": patient.patient_id,
+        "queue_number": queue_number,
+        "status": patient.status,
+        "patients_ahead": patients_ahead,
+        "estimated_wait_range": estimated_wait_range(patients_ahead),
+        "notified": bool(patient.notified_at) or patient.status == STATUS_CONSULTATION,
+        "notified_at": patient.notified_at,
+        "checked_in_at": patient.checked_in_at,
+        "access_token": patient_access_token(patient),
+        "submitted_information": {
+            "name": patient.name,
+            "age": patient.age,
+            "symptoms": patient.symptoms,
+            "medical_history": patient.medical_history,
+            "ctas_urgency_level": patient.ctas_level,
+            "risk_score": patient.risk_score,
+            "queue_name": patient.queue_name,
+            "clinical_summary": patient.clinical_summary,
+            "recommended_action": patient.recommended_action,
+        },
+    }
+
+
+def find_patient_anywhere(local_patient_id: int) -> Patient:
+    patients = load_patients()
+    completed = load_completed_patients()
+    return get_patient_or_404(local_patient_id, patients + completed)
+
+
 @app.get("/health")
 def health() -> dict:
     return {
         "status": "ok",
+        "backend_version": BACKEND_VERSION,
         "deepseek_configured": bool(DEEPSEEK_API_KEY),
         "database_api_url": DATABASE_API_URL,
+        "healthcare_records_table": HEALTHCARE_RECORDS_TABLE,
+        "feedback_table": FEEDBACK_TABLE,
+        "patients_registration_table": PATIENTS_REGISTRATION_TABLE,
+        "medical_history_table": MEDICAL_HISTORY_TABLE,
     }
 
 
@@ -552,12 +960,90 @@ def get_patient_history(patient_id: int) -> dict:
     return {"patient_id": patient_id, "history": fetch_patient_history(patient_id)}
 
 
+@app.post("/patient/check-in")
+def patient_app_check_in(request: IntakeRequest) -> dict:
+    try:
+        result = intake(request)
+        if not result.get("database", {}).get("saved_to_database"):
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Check-in analysis completed, but the visit record was not saved to healthcare_records.",
+                    "database": result.get("database"),
+                    "registration_database": result.get("registration_database"),
+                },
+            )
+        patient_row = result["patient"]
+        try:
+            patient = find_patient_anywhere(int(patient_row["id"]))
+        except HTTPException:
+            patient = patient_from_dict(patient_row)
+        return {
+            "message": "Check-in complete.",
+            "patient": patient_status_payload(patient),
+            "analysis": result.get("analysis"),
+            "database": result.get("database"),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Patient app check-in failed: {type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            },
+        ) from exc
+
+
+@app.get("/patient/{local_patient_id}/status")
+def patient_app_status(local_patient_id: int) -> dict:
+    patient = find_patient_anywhere(local_patient_id)
+    return {"patient": patient_status_payload(patient)}
+
+
+@app.post("/patient/{local_patient_id}/feedback")
+def patient_app_feedback(local_patient_id: int, payload: dict) -> dict:
+    patient = find_patient_anywhere(local_patient_id)
+    raw_message = str(payload.get("message", "")).strip()
+    rating = str(payload.get("rating", "Unsure")).strip() or "Unsure"
+    condition_update = str(payload.get("condition_update", "")).strip()
+    feedback_message = str(payload.get("feedback_message", "")).strip()
+
+    if raw_message.startswith("[CONDITION_UPDATE]"):
+        condition_update = raw_message.replace("[CONDITION_UPDATE]", "", 1).strip()
+    elif raw_message.startswith("[APP_FEEDBACK]"):
+        feedback_message = raw_message.replace("[APP_FEEDBACK]", "", 1).strip()
+    elif not feedback_message:
+        feedback_message = raw_message
+
+    request = FeedbackRequest(
+        patient_id=patient.patient_id,
+        rating=rating,
+        message=feedback_message,
+        condition_update=condition_update,
+        ctas_level=patient.ctas_level,
+        risk_score=patient.risk_score,
+    )
+    result = save_feedback(request)
+    return {
+        "message": result["alert_agent"].get("patient_message") or "Your update was submitted.",
+        "feedback": result.get("feedback"),
+        "alert_agent": result.get("alert_agent"),
+        "database": result.get("database"),
+    }
+
+
 @app.post("/intake")
 def intake(request: IntakeRequest) -> dict:
     patients = load_patients()
     completed = load_completed_patients()
     local_id = next_local_id(patients, completed)
     database_patient_id = request.patient_id or local_id
+    check_in_time = datetime.now().isoformat(timespec="seconds")
+    registration_result = ensure_patient_registration(
+        database_patient_id, request.name, request.age, request.gender
+    )
 
     request_with_id = request.copy(update={"patient_id": database_patient_id})
     history_rows = fetch_patient_history(database_patient_id)
@@ -576,9 +1062,14 @@ def intake(request: IntakeRequest) -> dict:
         clinical_summary=analysis["clinical_summary"],
         reasoning=analysis["reasoning"],
         recommended_action=analysis["recommended_action"],
+        checked_in_at=check_in_time,
     )
+    database_result = create_healthcare_record(patient)
+    medical_history_result = save_medical_history_note(patient)
     patients.append(patient)
-    save_patients(patients)
+    local_storage_result = {"saved_locally": False, "skipped": True}
+    if not database_result.get("saved_to_database"):
+        local_storage_result = try_save_patients(patients)
 
     return {
         "message": "Risk Analysis Agent completed. Queue Prioritization Agent assigned the patient.",
@@ -586,6 +1077,10 @@ def intake(request: IntakeRequest) -> dict:
         "analysis": analysis,
         "queues": queue_prioritization_agent(patients),
         "summary": summary_payload(patients, completed),
+        "registration_database": registration_result,
+        "database": database_result,
+        "medical_history_database": medical_history_result,
+        "local_storage": local_storage_result,
     }
 
 
@@ -611,12 +1106,59 @@ def get_patients() -> dict:
 
 @app.get("/feedback")
 def get_local_feedback() -> dict:
-    return {"feedback": load_json_list(LOCAL_FEEDBACK_FILE)}
+    try:
+        return {"feedback": db_get_table(FEEDBACK_TABLE)}
+    except Exception:
+        return {"feedback": load_json_list(LOCAL_FEEDBACK_FILE)}
 
 
 @app.get("/alerts")
 def get_feedback_alerts() -> dict:
-    return {"alerts": load_json_list(ALERT_FILE)}
+    try:
+        rows = db_get_table(FEEDBACK_TABLE)
+        records = db_get_table(HEALTHCARE_RECORDS_TABLE)
+        patient_by_record = {
+            str(row.get("record_id")): row.get("patient_id")
+            for row in records
+            if row.get("record_id") is not None
+        }
+        alerts = []
+        for row in rows:
+            if str(row.get("alert_required")).lower() not in {"true", "1", "yes"}:
+                continue
+            severity = row.get("alert_severity") or "needs review"
+            alerts.append(
+                {
+                    **row,
+                    "patient_id": patient_by_record.get(str(row.get("record_id")), "Unknown"),
+                    "severity": severity,
+                    "alert_severity": severity,
+                    "alert_reason": row.get("alert_reason", "No alert reason provided."),
+                    "agent_source": row.get("agent_source", "database_feedback_alert_record"),
+                    "agent_decision_summary": (
+                        "Feedback Alert Agent decision: staff alert required. "
+                        f"Severity: {severity}. "
+                        f"Reason: {row.get('alert_reason', 'No alert reason provided.')}"
+                    ),
+                    "recommended_staff_action": (
+                        "Ask clinical staff to review this feedback and reassess the patient if needed."
+                    ),
+                    "datetime": row.get("created_time"),
+                    "feedback": row.get("feedback_message", ""),
+                }
+            )
+        local_alerts = load_json_list(ALERT_FILE)
+        seen = {
+            f"{alert.get('record_id')}|{alert.get('datetime') or alert.get('created_time')}|{alert.get('alert_reason')}"
+            for alert in alerts
+        }
+        for alert in local_alerts:
+            key = f"{alert.get('record_id')}|{alert.get('datetime') or alert.get('created_time')}|{alert.get('alert_reason')}"
+            if key not in seen:
+                alerts.append(alert)
+        return {"alerts": alerts}
+    except Exception:
+        return {"alerts": load_json_list(ALERT_FILE)}
 
 
 @app.post("/patient/{local_patient_id}/notify")
@@ -634,8 +1176,13 @@ def start_consultation(local_patient_id: int) -> dict:
     patient = get_patient_or_404(local_patient_id, patients)
     patient.status = STATUS_CONSULTATION
     patient.consultation_started_at = datetime.now().isoformat(timespec="seconds")
-    save_patients(patients)
-    return {"message": "Consultation started.", "patient": serialize_patient(patient)}
+    database_result = update_healthcare_record(
+        patient.id,
+        {"status": patient.status, "consultation_started_at": patient.consultation_started_at},
+    )
+    if not database_result.get("updated_database"):
+        save_patients(patients)
+    return {"message": "Consultation started.", "patient": serialize_patient(patient), "database": database_result}
 
 
 @app.post("/patient/{local_patient_id}/complete")
@@ -645,14 +1192,20 @@ def complete_patient(local_patient_id: int) -> dict:
     patient = get_patient_or_404(local_patient_id, patients)
     patient.status = STATUS_COMPLETED
     patient.completed_at = datetime.now().isoformat(timespec="seconds")
+    database_result = update_healthcare_record(
+        patient.id,
+        {"status": patient.status, "completed_at": patient.completed_at},
+    )
     patients = [row for row in patients if row.id != local_patient_id]
     completed.append(patient)
-    save_patients(patients)
-    save_completed_patients(completed)
+    if not database_result.get("updated_database"):
+        save_patients(patients)
+        save_completed_patients(completed)
     return {
         "message": "Patient marked as completed/discharged.",
         "patient": serialize_patient(patient),
         "summary": summary_payload(patients, completed),
+        "database": database_result,
     }
 
 
@@ -660,34 +1213,31 @@ def complete_patient(local_patient_id: int) -> dict:
 def save_feedback(request: FeedbackRequest) -> dict:
     feedback_text = request.message.strip()
     condition_text = request.condition_update.strip()
-    alert = feedback_alert_agent(request)
-    is_severe = alert.alert_required and alert.severity in {"medium", "high"}
-    metadata_text = (
-        f"Rating: {request.rating}; "
-        f"CTAS Level: {request.ctas_level if request.ctas_level is not None else 'not provided'}; "
-        f"Risk Score: {request.risk_score if request.risk_score is not None else 'not provided'}; "
-        f"Alert Required: {alert.alert_required}; "
-        f"Alert Severity: {alert.severity}."
+    linked_record = current_record_for_patient(request.patient_id)
+    record_id = linked_record.id if linked_record else None
+    ctas_level = request.ctas_level or (linked_record.ctas_level if linked_record else None)
+    risk_score = request.risk_score or (linked_record.risk_score if linked_record else None)
+    alert_request = request.copy(update={"ctas_level": ctas_level, "risk_score": risk_score})
+    alert = feedback_alert_agent(alert_request)
+    agent_decision_summary = (
+        f"Feedback Alert Agent decision: "
+        f"{'staff alert required' if alert.alert_required else 'no immediate staff alert required'}. "
+        f"Severity: {alert.severity}. Reason: {alert.alert_reason}"
     )
     database_feedback = {
-        "patient_id": request.patient_id,
-        "treatment": "Urgent Care Queue Review",
-        "feedback": (
-            f"{metadata_text} Queue Feedback: {feedback_text or 'not provided'} "
-            f"Condition Update: {condition_text or 'not provided'}"
-        ),
-        "datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "is_severe": str(is_severe).lower(),
-        "feedback_type": alert.feedback_type,
+        "record_id": record_id,
+        "rating": request.rating,
+        "feedback_message": feedback_text,
+        "condition_update": condition_text,
+        "alert_required": str(alert.alert_required).lower(),
+        "alert_reason": alert.alert_reason,
+        "created_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
     local_feedback = {
         **database_feedback,
-        "rating": request.rating,
-        "ctas_level": request.ctas_level,
-        "risk_score": request.risk_score,
-        "queue_feedback": feedback_text,
-        "condition_update": condition_text,
+        "risk_score": risk_score,
         "alert_agent": alert.dict(),
+        "agent_decision_summary": agent_decision_summary,
     }
     database_result = save_feedback_to_database(database_feedback, local_feedback)
 
@@ -695,12 +1245,14 @@ def save_feedback(request: FeedbackRequest) -> dict:
     if alert.alert_required:
         alert_record = {
             "patient_id": request.patient_id,
-            "datetime": database_feedback["datetime"],
+            "record_id": record_id,
+            "datetime": database_feedback["created_time"],
             "rating": request.rating,
-            "ctas_level": request.ctas_level,
-            "risk_score": request.risk_score,
+            "ctas_level": ctas_level,
+            "risk_score": risk_score,
             "feedback": feedback_text,
             "condition_update": condition_text,
+            "agent_decision_summary": agent_decision_summary,
             **alert.dict(),
         }
         save_feedback_alert(alert_record)

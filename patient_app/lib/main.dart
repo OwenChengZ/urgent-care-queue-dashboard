@@ -199,10 +199,10 @@ class PatientHomePage extends StatefulWidget {
 class _PatientHomePageState extends State<PatientHomePage>
     with WidgetsBindingObserver {
   final storage = const FlutterSecureStorage();
+  final patientIdController = TextEditingController();
   final nameController = TextEditingController();
   final ageController = TextEditingController();
   final symptomsController = TextEditingController();
-  final redFlagsController = TextEditingController();
   final historyController = TextEditingController();
   final updateDetailsController = TextEditingController();
   final appFeedbackController = TextEditingController();
@@ -210,7 +210,6 @@ class _PatientHomePageState extends State<PatientHomePage>
   PatientTab tab = PatientTab.status;
   PatientStatus? patient;
   String? patientToken;
-  int painSeverity = 5;
   bool submitting = false;
   bool refreshing = false;
   bool updating = false;
@@ -220,6 +219,7 @@ class _PatientHomePageState extends State<PatientHomePage>
   DateTime? lastUpdate;
   Timer? pollTimer;
   String conditionChoice = 'No change';
+  String genderChoice = 'Other';
   int appRating = 5;
   bool feedbackSubmitting = false;
   bool hasAnnouncedCall = false;
@@ -239,10 +239,10 @@ class _PatientHomePageState extends State<PatientHomePage>
     WidgetsBinding.instance.removeObserver(this);
     pollTimer?.cancel();
     for (final controller in [
+      patientIdController,
       nameController,
       ageController,
       symptomsController,
-      redFlagsController,
       historyController,
       updateDetailsController,
       appFeedbackController
@@ -354,7 +354,12 @@ class _PatientHomePageState extends State<PatientHomePage>
   }
 
   bool _validateForm() {
+    final patientIdText = patientIdController.text.trim();
+    final patientId = int.tryParse(patientIdText);
     final age = int.tryParse(ageController.text.trim());
+    if (patientIdText.isNotEmpty && (patientId == null || patientId <= 0)) {
+      return _failValidation('Please enter a valid patient ID, or leave it blank.');
+    }
     if (nameController.text.trim().isEmpty) {
       return _failValidation('Please enter your full name.');
     }
@@ -379,18 +384,18 @@ class _PatientHomePageState extends State<PatientHomePage>
   }
 
   Map<String, dynamic> _checkInPayload() {
-    final urgent = redFlagsController.text.trim();
-    final symptoms = [
-      symptomsController.text.trim(),
-      'Pain severity: $painSeverity/10.',
-      if (urgent.isNotEmpty) 'Urgent warning signs: $urgent.'
-    ].join(' ');
-    return {
+    final patientId = int.tryParse(patientIdController.text.trim());
+    final payload = {
       'name': nameController.text.trim(),
       'age': int.parse(ageController.text.trim()),
-      'symptoms': symptoms,
+      'gender': genderChoice,
+      'symptoms': symptomsController.text.trim(),
       'medical_history': historyController.text.trim()
     };
+    if (patientId != null && patientId > 0) {
+      payload['patient_id'] = patientId;
+    }
+    return payload;
   }
 
   Future<void> submitCheckIn() async {
@@ -427,12 +432,12 @@ class _PatientHomePageState extends State<PatientHomePage>
   }
 
   void _clearForm() {
+    patientIdController.clear();
     nameController.clear();
     ageController.clear();
     symptomsController.clear();
-    redFlagsController.clear();
     historyController.clear();
-    painSeverity = 5;
+    genderChoice = 'Other';
   }
 
   Future<void> refreshStatus({int? localPatientId, bool silent = false}) async {
@@ -579,18 +584,16 @@ class _PatientHomePageState extends State<PatientHomePage>
           AppView.welcome =>
             WelcomePage(onStart: () => setState(() => view = AppView.checkIn)),
           AppView.checkIn => CheckInPage(
+              patientIdController: patientIdController,
               nameController: nameController,
               ageController: ageController,
+              gender: genderChoice,
+              onGenderChanged: (v) => setState(() => genderChoice = v),
               symptomsController: symptomsController,
-              redFlagsController: redFlagsController,
               historyController: historyController,
-              painSeverity: painSeverity,
-              onPainChanged: (v) => setState(() => painSeverity = v),
               onReview: _reviewCheckIn),
           AppView.review => ReviewPage(
               data: _checkInPayload(),
-              painSeverity: painSeverity,
-              urgentSigns: redFlagsController.text.trim(),
               onBack: () => setState(() {
                     if (patient == null) {
                       view = AppView.checkIn;
@@ -603,13 +606,13 @@ class _PatientHomePageState extends State<PatientHomePage>
               submitting: submitting),
           AppView.active => IndexedStack(index: tab.index, children: [
               CheckInPage(
+                  patientIdController: patientIdController,
                   nameController: nameController,
                   ageController: ageController,
+                  gender: genderChoice,
+                  onGenderChanged: (v) => setState(() => genderChoice = v),
                   symptomsController: symptomsController,
-                  redFlagsController: redFlagsController,
                   historyController: historyController,
-                  painSeverity: painSeverity,
-                  onPainChanged: (v) => setState(() => painSeverity = v),
                   onReview: _reviewCheckIn),
               StatusPage(
                   patient: patient,
@@ -710,22 +713,22 @@ class WelcomePage extends StatelessWidget {
 
 class CheckInPage extends StatelessWidget {
   const CheckInPage(
-      {required this.nameController,
+      {required this.patientIdController,
+      required this.nameController,
       required this.ageController,
+      required this.gender,
+      required this.onGenderChanged,
       required this.symptomsController,
-      required this.redFlagsController,
       required this.historyController,
-      required this.painSeverity,
-      required this.onPainChanged,
       required this.onReview,
       super.key});
-  final TextEditingController nameController,
+  final TextEditingController patientIdController,
+      nameController,
       ageController,
       symptomsController,
-      redFlagsController,
       historyController;
-  final int painSeverity;
-  final ValueChanged<int> onPainChanged;
+  final String gender;
+  final ValueChanged<String> onGenderChanged;
   final VoidCallback onReview;
   @override
   Widget build(BuildContext context) => PageScaffold(children: [
@@ -734,33 +737,37 @@ class CheckInPage extends StatelessWidget {
             subtitle:
                 'Enter your own information. You can review before submitting.'),
         const SectionHeader('Personal information'),
+        AppTextField(
+            controller: patientIdController,
+            label: 'Patient ID (optional)',
+            keyboardType: TextInputType.number),
+        const Text(
+          'If you have visited before, enter your patient ID so previous records can be included.',
+          style: TextStyle(color: Color(0xFF667085)),
+        ),
         AppTextField(controller: nameController, label: 'Full name'),
         AppTextField(
             controller: ageController,
             label: 'Age',
             keyboardType: TextInputType.number),
-        const SectionHeader('Symptoms and pain'),
-        Text('Pain severity: $painSeverity out of 10',
-            style: Theme.of(context).textTheme.titleMedium),
-        Semantics(
-            label: 'Pain severity slider, $painSeverity out of 10',
-            child: Slider(
-                value: painSeverity.toDouble(),
-                min: 0,
-                max: 10,
-                divisions: 10,
-                label: '$painSeverity',
-                onChanged: (v) => onPainChanged(v.round()))),
+        DropdownButtonFormField<String>(
+          value: gender,
+          decoration: const InputDecoration(labelText: 'Gender'),
+          items: const [
+            DropdownMenuItem(value: 'Male', child: Text('Male')),
+            DropdownMenuItem(value: 'Female', child: Text('Female')),
+            DropdownMenuItem(value: 'Other', child: Text('Other')),
+          ],
+          onChanged: (value) {
+            if (value != null) onGenderChanged(value);
+          },
+        ),
+        const SectionHeader('Symptoms'),
         AppTextField(
             controller: symptomsController,
             label: 'Main symptoms',
             maxLines: 4,
             voiceInput: true),
-        const SectionHeader('Urgent warning signs'),
-        AppTextField(
-            controller: redFlagsController,
-            label: 'New or urgent warning signs',
-            maxLines: 3),
         const SectionHeader('Relevant medical history'),
         AppTextField(
             controller: historyController,
@@ -777,15 +784,11 @@ class CheckInPage extends StatelessWidget {
 class ReviewPage extends StatelessWidget {
   const ReviewPage(
       {required this.data,
-      required this.painSeverity,
-      required this.urgentSigns,
       required this.onBack,
       required this.onConfirm,
       required this.submitting,
       super.key});
   final Map<String, dynamic> data;
-  final int painSeverity;
-  final String urgentSigns;
   final VoidCallback onBack;
   final VoidCallback? onConfirm;
   final bool submitting;
@@ -794,13 +797,12 @@ class ReviewPage extends StatelessWidget {
         const PageTitle(
             title: 'Review before submitting',
             subtitle: 'Check your information. You can go back to edit.'),
+        if (data['patient_id'] != null)
+          InfoRow(label: 'Patient ID', value: data['patient_id'].toString()),
         InfoRow(label: 'Name', value: data['name'].toString()),
         InfoRow(label: 'Age', value: data['age'].toString()),
+        InfoRow(label: 'Gender', value: data['gender'].toString()),
         InfoRow(label: 'Symptoms', value: data['symptoms'].toString()),
-        InfoRow(label: 'Pain severity', value: '$painSeverity/10'),
-        InfoRow(
-            label: 'Urgent warning signs',
-            value: urgentSigns.isEmpty ? 'None provided' : urgentSigns),
         InfoRow(
             label: 'Medical history',
             value: data['medical_history']?.toString().isEmpty ?? true
@@ -880,8 +882,6 @@ class MyInfoPage extends StatelessWidget {
     if (current == null) {
       return const EmptyState(text: 'No submitted information yet.');
     }
-    final parsed = parseSubmittedSymptoms(
-        current.submittedInformation['symptoms']?.toString() ?? '');
     return PageScaffold(children: [
       const PageTitle(
           title: 'My information',
@@ -896,12 +896,10 @@ class MyInfoPage extends StatelessWidget {
               'Not provided'),
       InfoRow(
           label: 'Symptoms',
-          value: parsed.symptoms.isEmpty ? 'Not provided' : parsed.symptoms),
-      InfoRow(
-          label: 'Pain severity', value: parsed.painSeverity ?? 'Not provided'),
-      InfoRow(
-          label: 'Urgent warning signs',
-          value: parsed.warningSigns ?? 'None provided'),
+          value: current.submittedInformation['symptoms']?.toString().isEmpty ??
+                  true
+              ? 'Not provided'
+              : current.submittedInformation['symptoms'].toString()),
       InfoRow(
           label: 'Medical history',
           value: current.submittedInformation['medical_history']
@@ -1375,38 +1373,6 @@ class EmptyState extends StatelessWidget {
       child: Padding(
           padding: const EdgeInsets.all(24),
           child: Text(text, textAlign: TextAlign.center)));
-}
-
-class ParsedSymptoms {
-  const ParsedSymptoms(
-      {required this.symptoms, this.painSeverity, this.warningSigns});
-  final String symptoms;
-  final String? painSeverity;
-  final String? warningSigns;
-}
-
-ParsedSymptoms parseSubmittedSymptoms(String raw) {
-  final painIndex = raw.indexOf('Pain severity:');
-  final warningIndex = raw.indexOf('Urgent warning signs:');
-  final symptomEnd = [painIndex, warningIndex]
-      .where((i) => i >= 0)
-      .fold<int>(raw.length, (min, i) => i < min ? i : min);
-  final symptoms =
-      raw.substring(0, symptomEnd).trim().replaceAll(RegExp(r'\s+\.$'), '');
-  String? pain;
-  String? warning;
-  if (painIndex >= 0) {
-    final end = warningIndex > painIndex ? warningIndex : raw.length;
-    pain = raw.substring(painIndex + 'Pain severity:'.length, end).trim();
-  }
-  if (warningIndex >= 0) {
-    warning =
-        raw.substring(warningIndex + 'Urgent warning signs:'.length).trim();
-  }
-  return ParsedSymptoms(
-      symptoms: symptoms,
-      painSeverity: pain?.replaceAll(RegExp(r'\.$'), ''),
-      warningSigns: warning?.replaceAll(RegExp(r'\.$'), ''));
 }
 
 DateTime? parseDate(String? value) =>
