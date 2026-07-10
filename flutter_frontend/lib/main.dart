@@ -14,7 +14,7 @@ class UrgentCareApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Urgent Care Queue Dashboard',
+      title: 'CareFlow',
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF1F5F8B),
@@ -234,7 +234,6 @@ class _DashboardPageState extends State<DashboardPage> {
               style: TextStyle(color: Color(0xFF667085)),
             ),
             const SizedBox(height: 18),
-            buildTextField(apiBaseController, 'Backend API'),
             buildTextField(
               patientIdController,
               'Patient ID',
@@ -279,13 +278,8 @@ class _DashboardPageState extends State<DashboardPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Urgent Care Queue Dashboard',
+                      'CareFlow',
                       style: TextStyle(fontSize: 30, fontWeight: FontWeight.w800),
-                    ),
-                    SizedBox(height: 6),
-                    Text(
-                      'DTI6302 AX00 Intelligent Health Informatics',
-                      style: TextStyle(color: Color(0xFF667085)),
                     ),
                   ],
                 ),

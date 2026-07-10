@@ -1193,6 +1193,7 @@ class AppTextField extends StatefulWidget {
 class _AppTextFieldState extends State<AppTextField> {
   late final stt.SpeechToText speech;
   bool listening = false;
+  String speechBaseText = '';
 
   @override
   void initState() {
@@ -1208,17 +1209,18 @@ class _AppTextFieldState extends State<AppTextField> {
     }
     final available = await speech.initialize();
     if (!available) return;
+    speechBaseText = widget.controller.text.trim();
     setState(() => listening = true);
     await speech.listen(onResult: (result) {
-      final existing = widget.controller.text.trim();
+      if (!result.finalResult) return;
       final words = result.recognizedWords.trim();
       widget.controller.text = [
-        if (existing.isNotEmpty) existing,
+        if (speechBaseText.isNotEmpty) speechBaseText,
         if (words.isNotEmpty) words
       ].join(' ');
       widget.controller.selection =
           TextSelection.collapsed(offset: widget.controller.text.length);
-      if (result.finalResult && mounted) setState(() => listening = false);
+      if (mounted) setState(() => listening = false);
     });
   }
 
