@@ -47,6 +47,7 @@ class _DashboardPageState extends State<DashboardPage> {
   final ageController = TextEditingController(text: '35');
   final symptomsController = TextEditingController();
   final historyController = TextEditingController();
+  final completedSearchController = TextEditingController();
 
   bool isLoading = false;
   String statusMessage = 'Ready.';
@@ -55,6 +56,7 @@ class _DashboardPageState extends State<DashboardPage> {
   List<dynamic> activePatients = [];
   List<dynamic> completedPatients = [];
   List<dynamic> alerts = [];
+  final Set<String> dismissedAlertKeys = <String>{};
 
   static const queueOrder = [
     'Emergency Queue',
@@ -66,6 +68,18 @@ class _DashboardPageState extends State<DashboardPage> {
   void initState() {
     super.initState();
     refreshDashboard();
+  }
+
+  @override
+  void dispose() {
+    apiBaseController.dispose();
+    patientIdController.dispose();
+    nameController.dispose();
+    ageController.dispose();
+    symptomsController.dispose();
+    historyController.dispose();
+    completedSearchController.dispose();
+    super.dispose();
   }
 
   String get apiBase => apiBaseController.text.trim().replaceAll(RegExp(r'/$'), '');
@@ -109,7 +123,7 @@ class _DashboardPageState extends State<DashboardPage> {
         queues = Map<String, dynamic>.from(queueData['queues'] ?? {});
         activePatients = List<dynamic>.from(patientData['active'] ?? []);
         completedPatients = List<dynamic>.from(patientData['completed'] ?? []);
-        alerts = List<dynamic>.from(alertData['alerts'] ?? []).reversed.take(5).toList();
+        alerts = List<dynamic>.from(alertData['alerts'] ?? []).reversed.toList();
         statusMessage = 'Dashboard refreshed.';
       });
     } catch (error) {
@@ -472,12 +486,17 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget buildSidePanel() {
+    final visibleAlerts = alerts
+        .map((item) => Map<String, dynamic>.from(item))
+        .where((alert) => !dismissedAlertKeys.contains(alertKey(alert)))
+        .toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('Feedback Alerts', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 12),
-        if (alerts.isEmpty)
+        if (visibleAlerts.isEmpty)
           const Card(
             child: Padding(
               padding: EdgeInsets.all(16),
@@ -485,7 +504,21 @@ class _DashboardPageState extends State<DashboardPage> {
             ),
           )
         else
-          for (final item in alerts) buildAlertCard(Map<String, dynamic>.from(item)),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(10),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 420),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      for (final alert in visibleAlerts) buildAlertCard(alert),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
         const SizedBox(height: 18),
         const Text('Urgency Distribution', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
         const SizedBox(height: 12),
@@ -494,25 +527,59 @@ class _DashboardPageState extends State<DashboardPage> {
     );
   }
 
+  String alertKey(Map<String, dynamic> alert) {
+    return [
+      alert['feedback_id'],
+      alert['record_id'],
+      alert['patient_id'],
+      alert['created_time'],
+      alert['alert_reason'],
+      alert['condition_update'],
+    ].where((part) => part != null && part.toString().isNotEmpty).join('|');
+  }
+
   Widget buildAlertCard(Map<String, dynamic> alert) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '${alert['severity']?.toString().toUpperCase()} Alert - Patient ID ${alert['patient_id']}',
-              style: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 6),
-            Text(alert['alert_reason']?.toString() ?? 'No alert reason provided.'),
-            const SizedBox(height: 8),
-            Text(
-              alert['recommended_staff_action']?.toString() ?? 'Staff review recommended.',
-              style: const TextStyle(color: Color(0xFF1F5F8B)),
-            ),
-          ],
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          border: Border.all(color: const Color(0xFFF4D38D)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${alert['severity']?.toString().toUpperCase()} Alert - Patient ID ${alert['patient_id']}',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  IconButton(
+                    tooltip: 'Dismiss alert',
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () {
+                      setState(() => dismissedAlertKeys.add(alertKey(alert)));
+                    },
+                    icon: const Icon(Icons.close, size: 18),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(alert['alert_reason']?.toString() ?? 'No alert reason provided.'),
+              const SizedBox(height: 8),
+              Text(
+                alert['recommended_staff_action']?.toString() ?? 'Staff review recommended.',
+                style: const TextStyle(color: Color(0xFF1F5F8B)),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -552,29 +619,73 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Widget buildCompleted() {
+    final query = completedSearchController.text.trim().toLowerCase();
+    final filteredPatients = completedPatients.where((item) {
+      final patient = Map<String, dynamic>.from(item);
+      final searchable = [
+        patient['name'],
+        patient['patient_id'],
+        patient['record_id'],
+        patient['urgency_label'],
+        patient['status'],
+      ].where((part) => part != null).join(' ').toLowerCase();
+      return query.isEmpty || searchable.contains(query);
+    }).toList();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text(
-          'Completed / Discharged History',
-          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
-        ),
-        const SizedBox(height: 12),
-        if (completedPatients.isEmpty)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('No completed patients yet.'),
+        Card(
+          child: ExpansionTile(
+            initiallyExpanded: false,
+            title: const Text(
+              'Completed / Discharged History',
+              style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
             ),
-          )
-        else
-          for (final item in completedPatients)
-            Card(
-              child: ListTile(
-                title: Text(item['name']?.toString() ?? 'Unnamed Patient'),
-                subtitle: Text('Patient ID: ${item['patient_id']} | ${item['urgency_label']}'),
+            subtitle: Text('${completedPatients.length} completed patient(s)'),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+            children: [
+              TextField(
+                controller: completedSearchController,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'Search by name, patient ID, record ID, or urgency',
+                  prefixIcon: const Icon(Icons.search),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                ),
               ),
-            ),
+              const SizedBox(height: 12),
+              if (completedPatients.isEmpty)
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('No completed patients yet.'),
+                )
+              else if (filteredPatients.isEmpty)
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('No completed patients match this search.'),
+                )
+              else
+                for (final item in filteredPatients)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8FAFC),
+                        border: Border.all(color: const Color(0xFFD9DEE8)),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: ListTile(
+                        title: Text(item['name']?.toString() ?? 'Unnamed Patient'),
+                        subtitle: Text(
+                          'Patient ID: ${item['patient_id']} | Record ID: ${item['record_id'] ?? 'N/A'} | ${item['urgency_label']}',
+                        ),
+                      ),
+                    ),
+                  ),
+            ],
+          ),
+        ),
       ],
     );
   }

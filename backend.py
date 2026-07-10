@@ -986,6 +986,7 @@ def patient_status_payload(patient: Patient) -> dict:
         "notified": bool(patient.notified_at) or patient.status == STATUS_CONSULTATION,
         "notified_at": patient.notified_at,
         "checked_in_at": patient.checked_in_at,
+        "server_time": now_iso(),
         "access_token": patient_access_token(patient),
         "submitted_information": {
             "name": patient.name,

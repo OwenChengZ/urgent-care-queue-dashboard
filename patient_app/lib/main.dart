@@ -66,6 +66,7 @@ class PatientStatus {
       this.notified = false,
       this.notifiedAt,
       this.checkedInAt,
+      this.serverTime,
       this.accessToken});
   final int localPatientId;
   final int patientId;
@@ -76,6 +77,7 @@ class PatientStatus {
   final bool notified;
   final String? notifiedAt;
   final String? checkedInAt;
+  final String? serverTime;
   final String? accessToken;
   final Map<String, dynamic> submittedInformation;
   bool get isFinished =>
@@ -97,6 +99,7 @@ class PatientStatus {
         notified: json['notified'] == true,
         notifiedAt: json['notified_at']?.toString(),
         checkedInAt: json['checked_in_at']?.toString(),
+        serverTime: json['server_time']?.toString(),
         accessToken: json['access_token']?.toString(),
         submittedInformation: Map<String, dynamic>.from(
             json['submitted_information'] as Map? ?? {}),
@@ -111,6 +114,7 @@ class PatientStatus {
         'notified': notified,
         'notified_at': notifiedAt,
         'checked_in_at': checkedInAt,
+        'server_time': serverTime,
         'submitted_information': submittedInformation
       };
   static int _asInt(dynamic value) =>
@@ -853,7 +857,7 @@ class StatusPage extends StatelessWidget {
             label: 'Patients ahead', value: current.patientsAhead.toString()),
         MetricTile(label: 'Estimated wait', value: current.estimatedWaitRange)
       ]),
-      Text('Last updated: ${formatDateTime(lastUpdate)}'),
+      Text('Last updated: ${formatServerDateTime(current.serverTime, fallback: lastUpdate)}'),
       if (refreshError != null)
         NoticeCard(text: 'Refresh problem: $refreshError'),
       FilledButton.icon(
@@ -1386,6 +1390,12 @@ String formatDateTime(DateTime? value) {
   final hour = local.hour.toString().padLeft(2, '0');
   final minute = local.minute.toString().padLeft(2, '0');
   return '${local.year}-${local.month.toString().padLeft(2, '0')}-${local.day.toString().padLeft(2, '0')} $hour:$minute';
+}
+
+String formatServerDateTime(String? value, {DateTime? fallback}) {
+  if (value == null || value.isEmpty) return formatDateTime(fallback);
+  final normalized = value.replaceFirst('T', ' ');
+  return normalized.length >= 16 ? normalized.substring(0, 16) : normalized;
 }
 
 void unawaited(Future<void> future) {}
