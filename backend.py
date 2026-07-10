@@ -293,6 +293,33 @@ def load_patient_registration_map() -> Dict[int, dict]:
     return profiles
 
 
+def load_medical_history_notes_map() -> Dict[int, str]:
+    try:
+        rows = db_get_table(MEDICAL_HISTORY_TABLE)
+    except Exception:
+        return {}
+
+    latest_rows: Dict[int, dict] = {}
+    for row in rows:
+        try:
+            patient_id = int(row.get("patient_id"))
+        except (TypeError, ValueError):
+            continue
+        notes = str(row.get("notes") or "").strip()
+        if not notes:
+            continue
+        current = latest_rows.get(patient_id)
+        current_time = parse_dt(current.get("last_updated") or current.get("diagnosis_date")) if current else None
+        row_time = parse_dt(row.get("last_updated") or row.get("diagnosis_date"))
+        if current is None or row_time >= current_time:
+            latest_rows[patient_id] = row
+
+    return {
+        patient_id: str(row.get("notes") or "").strip()
+        for patient_id, row in latest_rows.items()
+    }
+
+
 def ensure_patient_registration(patient_id: int, name: str, age: int, gender: str) -> dict:
     profiles = load_patient_registration_map()
     if patient_id in profiles:
@@ -313,7 +340,11 @@ def ensure_patient_registration(patient_id: int, name: str, age: int, gender: st
         return {"registered": False, "created": False, "error": str(exc), "attempted_payload": payload}
 
 
-def patient_from_healthcare_record(row: dict, profile: Optional[dict] = None) -> Patient:
+def patient_from_healthcare_record(
+    row: dict,
+    profile: Optional[dict] = None,
+    medical_history_note: str = "",
+) -> Patient:
     ctas_level = int(row.get("ctas_urgency_level") or row.get("ctas_level") or 5)
     risk_score = int(row.get("risk_score") or fallback_risk_score_from_ctas(ctas_level))
     record_id = int(row.get("record_id") or row.get("id") or row.get("patient_id") or 0)
@@ -328,7 +359,7 @@ def patient_from_healthcare_record(row: dict, profile: Optional[dict] = None) ->
         name=str(profile.get("name") or row.get("name") or f"Patient {patient_id}"),
         age=age_from_dob(profile.get("dob")) or int(row.get("age") or 0),
         symptoms=str(row.get("symptoms") or ""),
-        medical_history=str(row.get("medical_history") or ""),
+        medical_history=str(row.get("medical_history") or medical_history_note or ""),
         ctas_level=ctas_level,
         risk_score=risk_score,
         queue_name=str(row.get("queue_name") or queue_name_for_ctas(ctas_level)),
@@ -362,8 +393,13 @@ def load_healthcare_records_from_database() -> Optional[List[Patient]]:
     try:
         rows = db_get_table(HEALTHCARE_RECORDS_TABLE)
         profiles = load_patient_registration_map()
+        medical_history_notes = load_medical_history_notes_map()
         return [
-            patient_from_healthcare_record(row, profiles.get(int(row.get("patient_id") or 0)))
+            patient_from_healthcare_record(
+                row,
+                profiles.get(int(row.get("patient_id") or 0)),
+                medical_history_notes.get(int(row.get("patient_id") or 0), ""),
+            )
             for row in rows
         ]
     except Exception:
