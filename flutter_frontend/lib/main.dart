@@ -210,15 +210,7 @@ class _DashboardPageState extends State<DashboardPage> {
     return Scaffold(
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final isWide = constraints.maxWidth >= 1050;
-          final content = [
-            SizedBox(width: isWide ? 360 : double.infinity, child: buildCheckInPanel()),
-            Expanded(child: buildDashboard()),
-          ];
-
-          return isWide
-              ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: content)
-              : ListView(children: [buildCheckInPanel(), buildDashboard()]);
+          return buildDashboard();
         },
       ),
     );
@@ -469,20 +461,12 @@ class _DashboardPageState extends State<DashboardPage> {
                 runSpacing: 8,
                 children: [
                   OutlinedButton(
-                    onPressed: () => patientAction(patient['id'] as int, 'notify'),
-                    child: const Text('Notify Patient'),
-                  ),
-                  OutlinedButton(
                     onPressed: () => patientAction(patient['id'] as int, 'start'),
                     child: const Text('Start Consultation'),
                   ),
                   FilledButton(
                     onPressed: () => patientAction(patient['id'] as int, 'complete'),
                     child: const Text('Mark as Completed'),
-                  ),
-                  TextButton(
-                    onPressed: () => showFeedbackDialog(patient),
-                    child: const Text('Feedback Chatbot'),
                   ),
                 ],
               ),
