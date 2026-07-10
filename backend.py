@@ -78,6 +78,14 @@ def fallback_risk_score_from_ctas(level: int) -> int:
     return {1: 10, 2: 8, 3: 6, 4: 3, 5: 1}.get(level, 1)
 
 
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def now_database_text() -> str:
+    return datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S%z")
+
+
 @dataclass
 class Patient:
     id: int
@@ -93,7 +101,7 @@ class Patient:
     reasoning: str
     recommended_action: str
     status: str = STATUS_WAITING
-    checked_in_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    checked_in_at: str = field(default_factory=now_iso)
     consultation_started_at: Optional[str] = None
     completed_at: Optional[str] = None
     notified_at: Optional[str] = None
@@ -340,6 +348,24 @@ def ensure_patient_registration(patient_id: int, name: str, age: int, gender: st
         return {"registered": False, "created": False, "error": str(exc), "attempted_payload": payload}
 
 
+SUMMARY_REASONING_SEPARATOR = "\n\nReasoning:\n"
+
+
+def pack_summary_with_reasoning(summary: str, reasoning: str) -> str:
+    summary = summary.strip()
+    reasoning = reasoning.strip()
+    if not reasoning:
+        return summary
+    return f"{summary}{SUMMARY_REASONING_SEPARATOR}{reasoning}"
+
+
+def unpack_summary_with_reasoning(value: str) -> tuple[str, str]:
+    if SUMMARY_REASONING_SEPARATOR not in value:
+        return value.strip(), ""
+    summary, reasoning = value.split(SUMMARY_REASONING_SEPARATOR, 1)
+    return summary.strip(), reasoning.strip()
+
+
 def patient_from_healthcare_record(
     row: dict,
     profile: Optional[dict] = None,
@@ -353,6 +379,15 @@ def patient_from_healthcare_record(
     status = str(row.get("status") or STATUS_WAITING)
     if status == LEGACY_COMPLETED_STATUS:
         status = STATUS_COMPLETED
+    clinical_summary, stored_reasoning = unpack_summary_with_reasoning(str(row.get("clinical_summary") or ""))
+    recommended_action = str(row.get("recommended_action") or "")
+    default_reasoning = (
+        f"Clinical decision support report: CTAS Level {ctas_level} with risk score {risk_score}/10. "
+        f"Queue assignment: {row.get('queue_name') or queue_name_for_ctas(ctas_level)}. "
+        f"Clinical summary: {clinical_summary or 'No clinical summary available.'} "
+        f"Recommended staff action: {recommended_action or 'No recommended action available.'} "
+        "This is decision support only and should be reviewed by clinical staff."
+    )
     return Patient(
         id=record_id,
         patient_id=patient_id,
@@ -363,11 +398,11 @@ def patient_from_healthcare_record(
         ctas_level=ctas_level,
         risk_score=risk_score,
         queue_name=str(row.get("queue_name") or queue_name_for_ctas(ctas_level)),
-        clinical_summary=str(row.get("clinical_summary") or ""),
-        reasoning=str(row.get("reasoning") or "Reasoning is summarized in the clinical summary and recommended action."),
-        recommended_action=str(row.get("recommended_action") or ""),
+        clinical_summary=clinical_summary,
+        reasoning=str(row.get("reasoning") or stored_reasoning or default_reasoning),
+        recommended_action=recommended_action,
         status=status,
-        checked_in_at=str(row.get("check_in_time") or row.get("checked_in_at") or datetime.now().isoformat(timespec="seconds")),
+        checked_in_at=str(row.get("check_in_time") or row.get("checked_in_at") or now_iso()),
         consultation_started_at=row.get("consultation_started_at"),
         completed_at=row.get("completed_at"),
     )
@@ -381,7 +416,7 @@ def patient_to_healthcare_record(patient: Patient) -> dict:
         "risk_score": patient.risk_score,
         "queue_name": patient.queue_name,
         "status": patient.status,
-        "clinical_summary": patient.clinical_summary,
+        "clinical_summary": pack_summary_with_reasoning(patient.clinical_summary, patient.reasoning),
         "recommended_action": patient.recommended_action,
         "check_in_time": patient.checked_in_at,
         "consultation_started_at": patient.consultation_started_at,
@@ -469,7 +504,7 @@ def create_healthcare_record(patient: Patient) -> dict:
 def save_medical_history_note(patient: Patient) -> dict:
     if not patient.medical_history.strip():
         return {"saved_to_database": False, "skipped": True, "reason": "No medical history provided."}
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_database_text()
     payload = {
         "patient_id": patient.patient_id,
         "diagnosed_by": "Patient self-report",
@@ -1076,7 +1111,7 @@ def intake(request: IntakeRequest) -> dict:
     completed = load_completed_patients()
     local_id = next_local_id(patients, completed)
     database_patient_id = request.patient_id or local_id
-    check_in_time = datetime.now().isoformat(timespec="seconds")
+    check_in_time = now_iso()
     registration_result = ensure_patient_registration(
         database_patient_id, request.name, request.age, request.gender
     )
@@ -1201,7 +1236,7 @@ def get_feedback_alerts() -> dict:
 def notify_patient(local_patient_id: int) -> dict:
     patients = load_patients()
     patient = get_patient_or_404(local_patient_id, patients)
-    patient.notified_at = datetime.now().isoformat(timespec="seconds")
+    patient.notified_at = now_iso()
     save_patients(patients)
     return {"message": "Patient notified.", "patient": serialize_patient(patient)}
 
@@ -1211,7 +1246,7 @@ def start_consultation(local_patient_id: int) -> dict:
     patients = load_patients()
     patient = get_patient_or_404(local_patient_id, patients)
     patient.status = STATUS_CONSULTATION
-    patient.consultation_started_at = datetime.now().isoformat(timespec="seconds")
+    patient.consultation_started_at = now_iso()
     database_result = update_healthcare_record(
         patient.id,
         {"status": patient.status, "consultation_started_at": patient.consultation_started_at},
@@ -1227,7 +1262,7 @@ def complete_patient(local_patient_id: int) -> dict:
     completed = load_completed_patients()
     patient = get_patient_or_404(local_patient_id, patients)
     patient.status = STATUS_COMPLETED
-    patient.completed_at = datetime.now().isoformat(timespec="seconds")
+    patient.completed_at = now_iso()
     database_result = update_healthcare_record(
         patient.id,
         {"status": patient.status, "completed_at": patient.completed_at},
@@ -1267,7 +1302,7 @@ def save_feedback(request: FeedbackRequest) -> dict:
         "condition_update": condition_text,
         "alert_required": str(alert.alert_required).lower(),
         "alert_reason": alert.alert_reason,
-        "created_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "created_time": now_database_text(),
     }
     local_feedback = {
         **database_feedback,

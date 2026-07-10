@@ -434,11 +434,11 @@ class _DashboardPageState extends State<DashboardPage> {
               const SizedBox(height: 8),
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
-                title: const Text('Reasoning and recommended action'),
+                title: const Text('Clinical decision support report'),
                 children: [
                   Align(
                     alignment: Alignment.centerLeft,
-                    child: Text('Reasoning: ${patient['reasoning'] ?? 'No reasoning available.'}'),
+                    child: Text(patient['reasoning'] ?? 'No report available.'),
                   ),
                   const SizedBox(height: 6),
                   Align(
