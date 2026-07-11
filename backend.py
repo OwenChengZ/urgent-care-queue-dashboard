@@ -831,6 +831,16 @@ def save_feedback_alert(alert_record: dict) -> None:
     save_json_list(ALERT_FILE, alerts)
 
 
+def feedback_alert_display_key(alert: dict) -> str:
+    """Group the database row and local alert file entry from the same feedback event."""
+    record_id = str(alert.get("record_id") or "").strip()
+    patient_id = str(alert.get("patient_id") or "").strip()
+    condition_update = str(alert.get("condition_update") or "").strip().lower()
+    feedback = str(alert.get("feedback") or alert.get("feedback_message") or "").strip().lower()
+    reason = str(alert.get("alert_reason") or "").strip().lower()
+    return "|".join([record_id, patient_id, condition_update, feedback, reason])
+
+
 def risk_analysis_agent(request: IntakeRequest, history_rows: List[dict]) -> dict:
     history_text = format_history_for_prompt(history_rows)
     prompt = f"""
@@ -1194,40 +1204,35 @@ def get_feedback_alerts() -> dict:
             for row in records
             if row.get("record_id") is not None
         }
-        alerts = []
+        local_alerts = load_json_list(ALERT_FILE)
+        alerts = list(local_alerts)
+        seen = {feedback_alert_display_key(alert) for alert in alerts}
         for row in rows:
             if str(row.get("alert_required")).lower() not in {"true", "1", "yes"}:
                 continue
             severity = row.get("alert_severity") or "needs review"
-            alerts.append(
-                {
-                    **row,
-                    "patient_id": patient_by_record.get(str(row.get("record_id")), "Unknown"),
-                    "severity": severity,
-                    "alert_severity": severity,
-                    "alert_reason": row.get("alert_reason", "No alert reason provided."),
-                    "agent_source": row.get("agent_source", "database_feedback_alert_record"),
-                    "agent_decision_summary": (
-                        "Feedback Alert Agent decision: staff alert required. "
-                        f"Severity: {severity}. "
-                        f"Reason: {row.get('alert_reason', 'No alert reason provided.')}"
-                    ),
-                    "recommended_staff_action": (
-                        "Ask clinical staff to review this feedback and reassess the patient if needed."
-                    ),
-                    "datetime": row.get("created_time"),
-                    "feedback": row.get("feedback_message", ""),
-                }
-            )
-        local_alerts = load_json_list(ALERT_FILE)
-        seen = {
-            f"{alert.get('record_id')}|{alert.get('datetime') or alert.get('created_time')}|{alert.get('alert_reason')}"
-            for alert in alerts
-        }
-        for alert in local_alerts:
-            key = f"{alert.get('record_id')}|{alert.get('datetime') or alert.get('created_time')}|{alert.get('alert_reason')}"
+            database_alert = {
+                **row,
+                "patient_id": patient_by_record.get(str(row.get("record_id")), "Unknown"),
+                "severity": severity,
+                "alert_severity": severity,
+                "alert_reason": row.get("alert_reason", "No alert reason provided."),
+                "agent_source": row.get("agent_source", "database_feedback_alert_record"),
+                "agent_decision_summary": (
+                    "Feedback Alert Agent decision: staff alert required. "
+                    f"Severity: {severity}. "
+                    f"Reason: {row.get('alert_reason', 'No alert reason provided.')}"
+                ),
+                "recommended_staff_action": (
+                    "Ask clinical staff to review this feedback and reassess the patient if needed."
+                ),
+                "datetime": row.get("created_time"),
+                "feedback": row.get("feedback_message", ""),
+            }
+            key = feedback_alert_display_key(database_alert)
             if key not in seen:
-                alerts.append(alert)
+                alerts.append(database_alert)
+                seen.add(key)
         return {"alerts": alerts}
     except Exception:
         return {"alerts": load_json_list(ALERT_FILE)}
