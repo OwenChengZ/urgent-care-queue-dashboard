@@ -16,6 +16,7 @@ Run:
 import http.client
 import json
 import os
+import re
 import traceback
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -841,7 +842,203 @@ def feedback_alert_display_key(alert: dict) -> str:
     return "|".join([record_id, patient_id, condition_update, feedback, reason])
 
 
+def contains_any(text: str, terms: List[str]) -> bool:
+    return any(term in text for term in terms)
+
+
+def extract_max_pain_score(text: str) -> Optional[int]:
+    scores = []
+    for match in re.finditer(r"(?:pain|severity)[^\d]{0,12}(\d{1,2})\s*(?:/|out of)\s*10", text):
+        try:
+            scores.append(int(match.group(1)))
+        except ValueError:
+            continue
+    for match in re.finditer(r"(\d{1,2})\s*/\s*10", text):
+        try:
+            scores.append(int(match.group(1)))
+        except ValueError:
+            continue
+    return max(scores) if scores else None
+
+
+def extract_low_oxygen(text: str) -> Optional[int]:
+    for match in re.finditer(r"(?:oxygen|spo2|o2|saturation)[^\d]{0,16}(\d{2,3})\s*%?", text):
+        try:
+            value = int(match.group(1))
+        except ValueError:
+            continue
+        if value <= 92:
+            return value
+    return None
+
+
+def ctas_rule_engine(request: IntakeRequest, history_rows: List[dict]) -> dict:
+    """CTAS-inspired safety rule engine used to validate or replace LLM output.
+
+    The rules are decision-support heuristics derived from common CTAS red-flag
+    patterns in the prehospital CTAS guide: airway/breathing/circulation threats,
+    acute neurologic deficits, severe pain, anaphylaxis, major bleeding, sepsis
+    concern, pregnancy red flags, and low-acuity minor complaints.
+    """
+    text = f"{request.symptoms} {request.medical_history}".lower()
+    pain_score = extract_max_pain_score(text)
+    low_oxygen = extract_low_oxygen(text)
+    matched_rules: List[str] = []
+
+    def match(rule: str) -> None:
+        matched_rules.append(rule)
+
+    suggested_level = 4
+
+    # CTAS 1: immediate life-threatening airway, breathing, circulation, or consciousness threats.
+    if contains_any(
+        text,
+        [
+            "cardiac arrest",
+            "respiratory arrest",
+            "not breathing",
+            "no pulse",
+            "pulseless",
+            "cpr",
+            "unresponsive",
+            "unconscious",
+            "agonal",
+            "blue lips",
+            "cyanosis",
+        ],
+    ):
+        suggested_level = min(suggested_level, 1)
+        match("CTAS 1 rule: possible airway, breathing, circulation, or consciousness threat.")
+
+    if low_oxygen is not None and low_oxygen <= 88:
+        suggested_level = min(suggested_level, 1)
+        match(f"CTAS 1 rule: reported oxygen saturation is critically low ({low_oxygen}%).")
+
+    if contains_any(text, ["severe respiratory distress", "can't breathe", "cannot breathe", "unable to breathe"]):
+        suggested_level = min(suggested_level, 1)
+        match("CTAS 1 rule: severe respiratory distress language.")
+
+    if contains_any(text, ["uncontrolled bleeding", "massive bleeding", "severe bleeding", "hemorrhage", "shock"]):
+        suggested_level = min(suggested_level, 1)
+        match("CTAS 1 rule: possible shock or uncontrolled bleeding.")
+
+    chest_pain = contains_any(text, ["chest pain", "chest pressure", "crushing chest", "tight chest"])
+    chest_red_flags = contains_any(
+        text,
+        ["shortness of breath", "sweating", "diaphoresis", "left arm", "jaw pain", "radiating", "faint", "passed out"],
+    )
+    if chest_pain and chest_red_flags:
+        suggested_level = min(suggested_level, 1)
+        match("CTAS 1 rule: chest pain with cardiac or respiratory red flags.")
+
+    # CTAS 2: high-risk but not clearly requiring immediate resuscitation.
+    if chest_pain:
+        suggested_level = min(suggested_level, 2)
+        match("CTAS 2 rule: chest pain requires emergent assessment.")
+
+    stroke_terms = ["stroke", "facial droop", "face drooping", "slurred speech", "trouble speaking", "weakness", "numbness"]
+    if contains_any(text, stroke_terms) and contains_any(text, ["sudden", "new", "started", "acute", "right side", "left side"]):
+        suggested_level = min(suggested_level, 2)
+        match("CTAS 2 rule: possible acute stroke-like neurologic symptoms.")
+
+    if contains_any(text, ["seizure", "convulsion", "overdose", "poisoning", "suicidal", "self harm", "violent"]):
+        suggested_level = min(suggested_level, 2)
+        match("CTAS 2 rule: seizure, overdose, or immediate mental health safety concern.")
+
+    if contains_any(text, ["anaphylaxis", "throat swelling", "throat tight", "lip swelling", "tongue swelling", "hives and breathing"]):
+        suggested_level = min(suggested_level, 2)
+        match("CTAS 2 rule: possible anaphylaxis or airway swelling.")
+
+    if contains_any(text, ["sepsis", "very high fever", "rigors", "confused", "confusion"]) and contains_any(
+        text, ["fever", "infection", "weak", "low blood pressure", "dizzy"]
+    ):
+        suggested_level = min(suggested_level, 2)
+        match("CTAS 2 rule: infection with systemic red flags.")
+
+    if contains_any(text, ["pregnant", "pregnancy"]) and contains_any(text, ["bleeding", "severe pain", "abdominal pain", "faint"]):
+        suggested_level = min(suggested_level, 2)
+        match("CTAS 2 rule: pregnancy with bleeding, severe pain, or fainting.")
+
+    if pain_score is not None and pain_score >= 8:
+        suggested_level = min(suggested_level, 2)
+        match(f"CTAS 2 rule: severe pain score reported ({pain_score}/10).")
+
+    if low_oxygen is not None and 89 <= low_oxygen <= 92:
+        suggested_level = min(suggested_level, 2)
+        match(f"CTAS 2 rule: low oxygen saturation reported ({low_oxygen}%).")
+
+    # CTAS 3: urgent symptoms that need clinician assessment but no immediate resuscitation cue.
+    if contains_any(text, ["abdominal pain", "vomiting", "dehydrated", "dehydration"]) and contains_any(
+        text, ["fever", "repeated", "worsening", "weak", "unable to keep fluids"]
+    ):
+        suggested_level = min(suggested_level, 3)
+        match("CTAS 3 rule: abdominal pain, vomiting, fever, or dehydration concern.")
+
+    if contains_any(text, ["asthma", "wheezing", "mild shortness of breath", "moderate shortness of breath"]):
+        suggested_level = min(suggested_level, 3)
+        match("CTAS 3 rule: respiratory symptoms without severe distress language.")
+
+    if contains_any(text, ["head injury", "concussion"]) and not contains_any(text, ["unconscious", "seizure", "confused"]):
+        suggested_level = min(suggested_level, 3)
+        match("CTAS 3 rule: head injury without immediate high-risk neurologic signs.")
+
+    if pain_score is not None and 4 <= pain_score <= 7:
+        suggested_level = min(suggested_level, 3)
+        match(f"CTAS 3 rule: moderate pain score reported ({pain_score}/10).")
+
+    # CTAS 4-5: lower-acuity patterns. These only apply if no higher rule matched.
+    if suggested_level >= 4 and contains_any(
+        text,
+        ["sore throat", "mild cough", "runny nose", "low-grade fever", "minor sprain", "minor cut", "mild rash"],
+    ):
+        suggested_level = 4
+        match("CTAS 4 rule: mild symptoms without red-flag language.")
+
+    if suggested_level >= 4 and contains_any(text, ["no shortness of breath", "no breathing difficulty", "able to drink", "no fever"]):
+        suggested_level = min(suggested_level, 4)
+        match("CTAS 4 rule: reassuring negatives reduce urgency but still need routine assessment.")
+
+    if (
+        suggested_level >= 4
+        and contains_any(text, ["mild rash", "prescription refill", "medication refill", "routine", "follow up"])
+        and not contains_any(text, ["fever", "swelling", "breathing", "severe pain", "chest pain"])
+    ):
+        suggested_level = 5
+        match("CTAS 5 rule: non-urgent minor or administrative complaint without red flags.")
+
+    if not matched_rules:
+        matched_rules.append("Default CTAS 4 rule: no explicit CTAS red flags detected in text.")
+
+    score = fallback_risk_score_from_ctas(suggested_level)
+    summary = f"{request.age}-year-old patient reports: {request.symptoms.strip()}"
+    reasoning = (
+        "CTAS rule engine review: "
+        + " ".join(matched_rules)
+        + " This rule-based result is conservative decision support and should be reviewed by clinical staff."
+    )
+    action_by_level = {
+        1: "Immediately alert clinical staff and prepare resuscitation/emergency assessment.",
+        2: "Arrange emergent clinician assessment and monitor for deterioration.",
+        3: "Place in queue for urgent clinician assessment and obtain basic vital signs.",
+        4: "Place in queue for routine assessment; advise patient to report worsening symptoms.",
+        5: "Place in non-urgent queue; provide routine assessment when available.",
+    }
+    return {
+        "ctas_level": suggested_level,
+        "urgency_label": ctas_label(suggested_level),
+        "risk_score": score,
+        "queue_name": queue_name_for_ctas(suggested_level),
+        "clinical_summary": summary,
+        "reasoning": reasoning,
+        "recommended_action": action_by_level[suggested_level],
+        "matched_rules": matched_rules,
+        "agent_source": "ctas_rule_engine",
+        "history_used": history_rows,
+    }
+
+
 def risk_analysis_agent(request: IntakeRequest, history_rows: List[dict]) -> dict:
+    rule_result = ctas_rule_engine(request, history_rows)
     history_text = format_history_for_prompt(history_rows)
     prompt = f"""
 You are the Risk Analysis Agent for an urgent care queue system.
@@ -877,18 +1074,33 @@ Return valid JSON only:
   "recommended_action": "Practical next staff action."
 }}
 """
-    result = call_deepseek_json(
-        prompt,
-        "Return JSON only. Be concise, cautious, and clinically conservative.",
-    )
+    try:
+        result = call_deepseek_json(
+            prompt,
+            "Return JSON only. Be concise, cautious, and clinically conservative.",
+        )
+    except Exception:
+        rule_result["reasoning"] = (
+            f"{rule_result['reasoning']} DeepSeek was unavailable or failed, so the CTAS rule engine "
+            "was used as the fallback triage support method."
+        )
+        return rule_result
 
     try:
         level = int(result["ctas_level"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="Risk Analysis Agent returned an invalid CTAS level.") from exc
+    except (KeyError, TypeError, ValueError):
+        rule_result["reasoning"] = (
+            f"{rule_result['reasoning']} DeepSeek returned an invalid CTAS level, so the CTAS rule engine "
+            "was used as the fallback triage support method."
+        )
+        return rule_result
 
     if level not in CTAS_LEVELS:
-        raise HTTPException(status_code=502, detail=f"Unsupported CTAS level: {level}")
+        rule_result["reasoning"] = (
+            f"{rule_result['reasoning']} DeepSeek returned unsupported CTAS level {level}, so the CTAS rule engine "
+            "was used as the fallback triage support method."
+        )
+        return rule_result
 
     try:
         score = int(result.get("risk_score", fallback_risk_score_from_ctas(level)))
@@ -896,14 +1108,29 @@ Return valid JSON only:
         score = fallback_risk_score_from_ctas(level)
     score = max(1, min(10, score))
 
+    agent_source = "deepseek_risk_analysis_agent"
+    rule_level = int(rule_result["ctas_level"])
+    if rule_level < level:
+        level = rule_level
+        score = max(score, int(rule_result["risk_score"]))
+        agent_source = "deepseek_risk_analysis_agent_with_ctas_rule_upgrade"
+        rule_note = (
+            " CTAS rule engine safety check upgraded the urgency because: "
+            + " ".join(rule_result.get("matched_rules", []))
+        )
+    else:
+        rule_note = " CTAS rule engine safety check did not require escalation beyond the LLM result."
+
     return {
         "ctas_level": level,
         "urgency_label": ctas_label(level),
         "risk_score": score,
         "queue_name": queue_name_for_ctas(level),
-        "clinical_summary": str(result.get("clinical_summary", "")).strip(),
-        "reasoning": str(result.get("reasoning", "")).strip(),
-        "recommended_action": str(result.get("recommended_action", "")).strip(),
+        "clinical_summary": str(result.get("clinical_summary") or rule_result["clinical_summary"]).strip(),
+        "reasoning": (str(result.get("reasoning") or rule_result["reasoning"]).strip() + rule_note).strip(),
+        "recommended_action": str(result.get("recommended_action") or rule_result["recommended_action"]).strip(),
+        "matched_rules": rule_result.get("matched_rules", []),
+        "agent_source": agent_source,
         "history_used": history_rows,
     }
 
